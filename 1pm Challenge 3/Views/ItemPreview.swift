@@ -3,31 +3,34 @@
 //  1pm Challenge 3
 //
 
+import AVKit
 import Foundation
 import Photos
 import QuickLook
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// One request to preview an item inside a list. Every tap creates a new
-/// request, so tapping the same row twice still reopens QuickLook.
+/// request, so tapping the same row twice still reopens the preview.
 struct ItemPreviewRequest: Identifiable {
     let id = UUID()
     let items: [OverviewItem]
     let startIndex: Int
 }
 
-/// The local files QuickLook should show, plus the temporary folder (if any)
-/// that has to be removed once the preview is dismissed.
+/// The files Quick Look should show.
 struct PreparedPreview {
     var urls: [URL]
     var startIndex: Int
-    var directory: URL?
 }
 
-/// Turns overview items into file URLs QuickLook can read. Files already in
-/// the app's Documents folder are previewed in place. Photo library items are
-/// exported to a temporary folder first, because PhotoKit never exposes their
-/// original file URL directly.
+/// Builds what Quick Look needs for a tap.
+///
+/// Files that already live on disk are previewed in place. Photos from the
+/// library have no file URL, so only the tapped photo is written to a small
+/// on-disk cache; Quick Look then presents it with its usual zoom, share and
+/// swipe controls. Videos skip file export entirely and stream through Apple's
+/// AVKit player, which opens immediately even for large files.
 enum ItemPreviewResolver {
     static func prepare(_ request: ItemPreviewRequest) async throws -> PreparedPreview {
         let items = request.items
@@ -39,65 +42,31 @@ enum ItemPreviewResolver {
         let target = items[request.startIndex]
 
         // Files already live on disk, so the whole category can swipe through
-        // in one QuickLook session.
-        if items.allSatisfy({ $0.fileURL != nil }) {
-            let urls = items
-                .compactMap(\.fileURL)
-                .filter { FileManager.default.fileExists(atPath: $0.path) }
+        // in one Quick Look session.
+        let diskURLs = items
+            .compactMap(\.fileURL)
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
 
-            guard let targetURL = target.fileURL,
-                  let index = urls.firstIndex(of: targetURL) else {
-                throw ItemPreviewError.missingFile
-            }
-
-            return PreparedPreview(urls: urls, startIndex: index, directory: nil)
+        if let targetURL = target.fileURL,
+           let index = diskURLs.firstIndex(of: targetURL) {
+            return PreparedPreview(urls: diskURLs, startIndex: index)
         }
 
-        // Library assets have no URL until they are exported. Only the tapped
-        // item is prepared, because videos can be several gigabytes.
+        // Library photos have no URL, so keep a cached copy Quick Look can
+        // open. Re-opening the same photo skips the export completely.
         guard let identifier = target.assetIdentifier else {
             throw ItemPreviewError.missingItem
         }
 
-        let directory = try makeTemporaryDirectory()
-
-        do {
-            let url = try await AssetPreviewExporter.export(
-                identifier: identifier,
-                fallbackName: target.name,
-                isVideo: target.isVideo,
-                into: directory
-            )
-            return PreparedPreview(urls: [url], startIndex: 0, directory: directory)
-        } catch {
-            try? FileManager.default.removeItem(at: directory)
-            throw error
-        }
-    }
-
-    private static func makeTemporaryDirectory() throws -> URL {
-        let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("ItemPreviews", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
-
-        return directory
+        let url = try await AssetPhotoExporter.export(identifier: identifier)
+        return PreparedPreview(urls: [url], startIndex: 0)
     }
 }
 
 // MARK: - Photo library export
 
-private enum AssetPreviewExporter {
-    static func export(
-        identifier: String,
-        fallbackName: String,
-        isVideo: Bool,
-        into directory: URL
-    ) async throws -> URL {
+private enum AssetPhotoExporter {
+    static func export(identifier: String) async throws -> URL {
         let assets = PHAsset.fetchAssets(
             withLocalIdentifiers: [identifier],
             options: nil
@@ -107,58 +76,118 @@ private enum AssetPreviewExporter {
             throw ItemPreviewError.missingItem
         }
 
-        let resources = PHAssetResource.assetResources(for: asset)
-        let preferredTypes: [PHAssetResourceType] = isVideo
-            ? [.fullSizeVideo, .video]
-            : [.fullSizePhoto, .photo, .alternatePhoto]
+        let directory = try cacheDirectory()
 
-        guard let resource = preferredTypes
-            .compactMap({ type in resources.first { $0.type == type } })
-            .first else {
-            throw ItemPreviewError.missingResource
+        if let cached = cachedPreview(for: identifier, in: directory) {
+            return cached
         }
 
-        let name = resource.originalFilename.isEmpty
-            ? fallbackName
-            : resource.originalFilename
+        let options = PHImageRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.version = .current
+        options.deliveryMode = .highQualityFormat
+        options.resizeMode = .none
+
+        let (data, dataUTI) = try await requestImageData(for: asset, options: options)
+
+        let fileExtension = dataUTI
+            .flatMap { UTType($0)?.preferredFilenameExtension }
+            ?? "jpg"
+
         let destination = directory.appendingPathComponent(
-            safeFilename(name, isVideo: isVideo)
+            "\(key(for: identifier)).\(fileExtension)"
         )
 
-        // iCloud-only items are downloaded on demand so they can be previewed
-        // even when the original is not on this iPhone yet.
-        let options = PHAssetResourceRequestOptions()
-        options.isNetworkAccessAllowed = true
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            PHAssetResourceManager.default().writeData(
-                for: resource,
-                toFile: destination,
-                options: options
-            ) { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: ())
-                }
-            }
+        do {
+            try data.write(to: destination, options: .atomic)
+        } catch {
+            throw ItemPreviewError.missingPreview
         }
 
+        trimCache(in: directory)
         return destination
     }
 
-    /// QuickLook relies on the file extension to pick a viewer, so every
-    /// exported file keeps (or gets) a sensible one.
-    private static func safeFilename(_ name: String, isVideo: Bool) -> String {
-        let trimmed = (name as NSString).lastPathComponent
-        let base = trimmed.isEmpty
-            ? (isVideo ? "Preview.mov" : "Preview.jpg")
-            : trimmed
+    private static func requestImageData(
+        for asset: PHAsset,
+        options: PHImageRequestOptions
+    ) async throws -> (Data, String?) {
+        try await withCheckedThrowingContinuation { continuation in
+            let gate = PreviewDataGate(continuation)
 
-        if (base as NSString).pathExtension.isEmpty {
-            return base + (isVideo ? ".mov" : ".jpg")
+            PHImageManager.default().requestImageDataAndOrientation(
+                for: asset,
+                options: options
+            ) { data, dataUTI, _, _ in
+                if let data {
+                    gate.finish(.success((data, dataUTI)))
+                } else {
+                    gate.finish(.failure(ItemPreviewError.missingPreview))
+                }
+            }
         }
-        return base
+    }
+
+    // MARK: Cache
+
+    private static func cacheDirectory() throws -> URL {
+        let base = FileManager.default.urls(
+            for: .cachesDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+
+        let directory = base.appendingPathComponent("ItemPreviews", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+
+        return directory
+    }
+
+    private static func cachedPreview(for identifier: String, in directory: URL) -> URL? {
+        let name = key(for: identifier)
+
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else {
+            return nil
+        }
+
+        return files.first {
+            $0.deletingPathExtension().lastPathComponent == name
+        }
+    }
+
+    private static func key(for identifier: String) -> String {
+        identifier.map { character in
+            character.isLetter || character.isNumber ? character : "_"
+        }
+        .reduce(into: "") { $0.append($1) }
+    }
+
+    /// Photo previews are disposable, so old copies are swept away whenever a
+    /// new one is written.
+    private static func trimCache(in directory: URL) {
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 60 * 60)
+
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else {
+            return
+        }
+
+        for file in files {
+            let modified = (try? file.resourceValues(
+                forKeys: [.contentModificationDateKey]
+            ).contentModificationDate) ?? .distantPast
+
+            if modified < cutoff {
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
     }
 }
 
@@ -167,7 +196,7 @@ private enum AssetPreviewExporter {
 private enum ItemPreviewError: LocalizedError {
     case missingItem
     case missingFile
-    case missingResource
+    case missingPreview
 
     var errorDescription: String? {
         switch self {
@@ -175,7 +204,7 @@ private enum ItemPreviewError: LocalizedError {
             return "This item is no longer available."
         case .missingFile:
             return "This file couldn’t be found on this iPhone."
-        case .missingResource:
+        case .missingPreview:
             return "This item can’t be previewed right now."
         }
     }
@@ -184,7 +213,7 @@ private enum ItemPreviewError: LocalizedError {
 // MARK: - SwiftUI integration
 
 extension View {
-    /// Adds QuickLook previewing to any page that lists overview items.
+    /// Adds previewing to any page that lists overview items.
     func itemPreview(request: Binding<ItemPreviewRequest?>) -> some View {
         modifier(ItemPreviewModifier(request: request))
     }
@@ -195,13 +224,16 @@ private struct ItemPreviewModifier: ViewModifier {
 
     @State private var urls: [URL] = []
     @State private var selection: URL?
-    @State private var sessionDirectory: URL?
+    @State private var videoPreview: OverviewItem?
     @State private var isPreparing = false
     @State private var errorMessage: String?
 
     func body(content: Content) -> some View {
         content
             .quickLookPreview($selection, in: urls)
+            .fullScreenCover(item: $videoPreview) { item in
+                LibraryVideoPreviewView(item: item)
+            }
             .overlay {
                 if isPreparing {
                     preparingOverlay
@@ -224,10 +256,9 @@ private struct ItemPreviewModifier: ViewModifier {
                 await prepare(request)
             }
             .onChange(of: selection) { _, newValue in
-                // QuickLook clears its selection when the sheet is dismissed,
-                // which is the moment the exported copies can be removed.
+                // Quick Look clears its selection when it is dismissed.
                 if newValue == nil {
-                    cleanup()
+                    urls = []
                 }
             }
     }
@@ -255,35 +286,182 @@ private struct ItemPreviewModifier: ViewModifier {
 
     @MainActor
     private func prepare(_ request: ItemPreviewRequest) async {
-        cleanup()
+        urls = []
+        selection = nil
+
+        guard request.items.indices.contains(request.startIndex) else {
+            errorMessage = ItemPreviewError.missingItem.localizedDescription
+            return
+        }
+
+        let target = request.items[request.startIndex]
+
+        // Videos use Apple's player so even a multi-gigabyte clip starts
+        // playing without being copied anywhere first.
+        if target.assetIdentifier != nil, target.isVideo {
+            videoPreview = target
+            return
+        }
+
         isPreparing = true
         defer { isPreparing = false }
 
         do {
             let prepared = try await ItemPreviewResolver.prepare(request)
 
-            guard !Task.isCancelled else {
-                if let directory = prepared.directory {
-                    try? FileManager.default.removeItem(at: directory)
-                }
-                return
-            }
+            guard !Task.isCancelled else { return }
 
-            sessionDirectory = prepared.directory
             urls = prepared.urls
             selection = prepared.urls[prepared.startIndex]
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
+}
 
-    private func cleanup() {
-        if let sessionDirectory {
-            try? FileManager.default.removeItem(at: sessionDirectory)
+// MARK: - Video preview
+
+/// Apple's AVKit player, streamed straight from the photo library.
+private struct LibraryVideoPreviewView: View {
+    let item: OverviewItem
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var player: AVPlayer?
+    @State private var errorMessage: String?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            if let player {
+                VideoPlayer(player: player)
+                    .ignoresSafeArea()
+            } else if errorMessage == nil {
+                ProgressView()
+                    .tint(.white)
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.82))
+                    .multilineTextAlignment(.center)
+                    .padding(24)
+            }
+
+            closeButton
+        }
+        .statusBarHidden()
+        .task { await load() }
+        .onDisappear {
+            player?.pause()
+        }
+    }
+
+    private var closeButton: some View {
+        VStack {
+            HStack {
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(.black.opacity(0.45), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close preview")
+                .padding(.top, 8)
+                .padding(.trailing, 16)
+            }
+
+            Spacer()
+        }
+    }
+
+    private func load() async {
+        guard let identifier = item.assetIdentifier else {
+            errorMessage = "This item is no longer available."
+            return
         }
 
-        sessionDirectory = nil
-        urls = []
-        selection = nil
+        let fetch = PHAsset.fetchAssets(
+            withLocalIdentifiers: [identifier],
+            options: nil
+        )
+
+        guard let asset = fetch.firstObject else {
+            errorMessage = "This item is no longer available."
+            return
+        }
+
+        let options = PHVideoRequestOptions()
+        options.isNetworkAccessAllowed = true
+        options.deliveryMode = .automatic
+
+        do {
+            let playerItem = try await requestPlayerItem(
+                for: asset,
+                options: options
+            )
+
+            let player = AVPlayer(playerItem: playerItem)
+            self.player = player
+            player.play()
+        } catch {
+            errorMessage = "This video couldn’t be loaded."
+        }
+    }
+
+    private func requestPlayerItem(
+        for asset: PHAsset,
+        options: PHVideoRequestOptions
+    ) async throws -> AVPlayerItem {
+        try await withCheckedThrowingContinuation { continuation in
+            PHImageManager.default().requestPlayerItem(
+                forVideo: asset,
+                options: options
+            ) { playerItem, _ in
+                if let playerItem {
+                    continuation.resume(returning: playerItem)
+                } else {
+                    continuation.resume(throwing: ItemPreviewError.missingPreview)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Async gate
+
+/// PhotoKit can call its result handler more than once; this makes sure the
+/// continuation only finishes on the first result.
+private final class PreviewDataGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<(Data, String?), Error>?
+    private var isFinished = false
+
+    init(_ continuation: CheckedContinuation<(Data, String?), Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<(Data, String?), Error>) {
+        lock.lock()
+
+        guard !isFinished else {
+            lock.unlock()
+            return
+        }
+
+        isFinished = true
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(with: result)
     }
 }

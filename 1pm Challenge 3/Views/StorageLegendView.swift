@@ -12,40 +12,51 @@ import SwiftUI
 struct StorageLegendView: View {
     let usages: [CategoryUsage]
     let isLoading: Bool
+    let onSelect: (StorageCategory) -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             ForEach(usages) { usage in
-                VStack(spacing: 3) {
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(isUnavailable(usage) && !isLoading ? Color.clear : usage.category.color)
-                            .frame(width: 8, height: 8)
-                            .overlay {
-                                Circle()
-                                    .stroke(
-                                        usage.category.color.opacity(isUnavailable(usage) && !isLoading ? 0.9 : 0),
-                                        lineWidth: 1.2
-                                    )
-                            }
-                            .opacity(isLoading ? 0.45 : 1)
+                Button {
+                    guard !isLoading else { return }
+                    onSelect(usage.category)
+                } label: {
+                    VStack(spacing: 3) {
+                        HStack(spacing: 7) {
+                            Circle()
+                                .fill(isUnavailable(usage) && !isLoading ? Color.clear : usage.category.color)
+                                .frame(width: 8, height: 8)
+                                .overlay {
+                                    Circle()
+                                        .stroke(
+                                            usage.category.color.opacity(isUnavailable(usage) && !isLoading ? 0.9 : 0),
+                                            lineWidth: 1.2
+                                        )
+                                }
+                                .opacity(isLoading ? 0.45 : 1)
 
-                        Text(usage.category.title)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(labelColor(for: usage))
+                            Text(usage.category.title)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(labelColor(for: usage))
+                                .lineLimit(1)
+                        }
+                        .fixedSize()
+
+                        Text(sizeText(for: usage))
+                            .font(.system(size: 10.5, weight: .medium))
+                            .monospacedDigit()
+                            .foregroundStyle(AppTheme.tertiaryText)
                             .lineLimit(1)
                     }
-                    .fixedSize()
-
-                    Text(sizeText(for: usage))
-                        .font(.system(size: 10.5, weight: .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(AppTheme.tertiaryText)
-                        .lineLimit(1)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity)
+                .buttonStyle(.plain)
+                .disabled(isLoading)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilityLabel(for: usage))
+                .accessibilityHint("Opens the \(usage.category.title) page")
+                .accessibilityAddTraits(.isButton)
             }
         }
         .frame(maxWidth: .infinity)

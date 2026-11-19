@@ -141,7 +141,8 @@ struct OverviewPage: View {
             OverviewDonutChartView(
                 kind: kind,
                 usages: viewModel.displayedUsages,
-                totalBytes: viewModel.displayedBytes,
+                totalBytes: viewModel.totalBytes,
+                previewItem: viewModel.previewItem,
                 filterSummary: viewModel.filterSummary,
                 diameter: diameter
             ) { category in

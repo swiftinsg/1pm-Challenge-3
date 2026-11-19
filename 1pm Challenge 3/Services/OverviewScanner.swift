@@ -3,10 +3,8 @@
 //  1pm Challenge 3
 //
 
-import AVFoundation
 import CryptoKit
 import Foundation
-import ImageIO
 import Photos
 import Vision
 
@@ -60,6 +58,10 @@ enum OverviewScanner {
             return .empty(accessState: access)
         }
 
+        if kind == .photos {
+            return await scanPhotos(assets: assets, access: access, progress: progress)
+        }
+
         var items: [OverviewItem] = []
         items.reserveCapacity(assets.count)
         var seenDigests = Set<String>()
@@ -68,58 +70,27 @@ enum OverviewScanner {
         for (index, asset) in assets.enumerated() {
             if Task.isCancelled { break }
 
-            if kind == .photos {
-                guard let measured = await loadPhoto(asset) else {
-                    skippedItems += 1
-                    await report(index: index, total: assets.count, progress: progress)
-                    continue
-                }
-
-                let isDuplicate = seenDigests.contains(measured.digest)
-                seenDigests.insert(measured.digest)
-
-                let image = measured.data.flatMap(thumbnailImage(from:))
-
-                items.append(
-                    OverviewItem(
-                        id: asset.localIdentifier,
-                        name: measured.name,
-                        bytes: measured.bytes,
-                        date: asset.creationDate,
-                        assetIdentifier: asset.localIdentifier,
-                        fileURL: nil,
-                        isVideo: false,
-                        isScreenshot: measured.isScreenshot,
-                        hasQRCode: image.map(containsQRCode) ?? false,
-                        isBlurry: image.map(isBlurry) ?? false,
-                        isDuplicate: isDuplicate
-                    )
-                )
-
-            } else {
-                guard let measured = await measureVideo(asset) else {
-                    skippedItems += 1
-                    await report(index: index, total: assets.count, progress: progress)
-                    continue
-                }
-
-                let isDuplicate = seenDigests.contains(measured.digest)
-                seenDigests.insert(measured.digest)
-
-                items.append(
-                    OverviewItem(
-                        id: asset.localIdentifier,
-                        name: measured.name,
-                        bytes: measured.bytes,
-                        date: asset.creationDate,
-                        assetIdentifier: asset.localIdentifier,
-                        fileURL: nil,
-                        isVideo: true,
-                        isDuplicate: isDuplicate,
-                        isScreenRecording: measured.isScreenRecording
-                    )
-                )
+            guard let measured = await measureVideo(asset) else {
+                skippedItems += 1
+                await report(index: index, total: assets.count, progress: progress)
+                continue
             }
+
+            let isDuplicate = !seenDigests.insert(measured.digest).inserted
+
+            items.append(
+                OverviewItem(
+                    id: asset.localIdentifier,
+                    name: measured.name,
+                    bytes: measured.bytes,
+                    date: asset.creationDate,
+                    assetIdentifier: asset.localIdentifier,
+                    fileURL: nil,
+                    isVideo: true,
+                    isDuplicate: isDuplicate,
+                    isScreenRecording: measured.isScreenRecording
+                )
+            )
 
             await report(index: index, total: assets.count, progress: progress)
         }
@@ -131,39 +102,244 @@ enum OverviewScanner {
         )
     }
 
+    // MARK: - Photos
+
+    /// Photos are measured in two passes:
+    ///
+    /// 1. Cheap metadata (size, filename, dimensions) for every asset. This is
+    ///    fast even for very large libraries.
+    /// 2. QR/blur analysis on small, locally available thumbnails, run several
+    ///    at a time.
+    ///
+    /// Earlier versions streamed and hashed each original image (and downloaded
+    /// iCloud originals) just to fill the same fields, which made a large
+    /// library take minutes.
+    private static func scanPhotos(
+        assets: [PHAsset],
+        access: PhotoAccessState,
+        progress: @escaping ProgressHandler
+    ) async -> OverviewScanResult {
+        var items: [OverviewItem] = []
+        items.reserveCapacity(assets.count)
+        var assetsByID: [String: PHAsset] = [:]
+        assetsByID.reserveCapacity(assets.count)
+        var seenDigests = Set<String>()
+        var skippedItems = 0
+
+        for asset in assets {
+            if Task.isCancelled { break }
+
+            guard let measured = await measurePhotoMetadata(asset) else {
+                skippedItems += 1
+                continue
+            }
+
+            let isDuplicate = !seenDigests.insert(measured.digest).inserted
+            assetsByID[asset.localIdentifier] = asset
+
+            items.append(
+                OverviewItem(
+                    id: asset.localIdentifier,
+                    name: measured.name,
+                    bytes: measured.bytes,
+                    date: asset.creationDate,
+                    assetIdentifier: asset.localIdentifier,
+                    fileURL: nil,
+                    isVideo: false,
+                    isScreenshot: measured.isScreenshot,
+                    isDuplicate: isDuplicate
+                )
+            )
+        }
+
+        guard !Task.isCancelled else {
+            return OverviewScanResult(
+                items: items,
+                accessState: access,
+                skippedItems: skippedItems
+            )
+        }
+
+        let flags = await analyzePhotos(
+            items: items,
+            assetsByID: assetsByID,
+            progress: progress
+        )
+
+        for index in items.indices {
+            guard let flag = flags[items[index].id] else { continue }
+            items[index].hasQRCode = flag.hasQRCode
+            items[index].isBlurry = flag.isBlurry
+        }
+
+        return OverviewScanResult(
+            items: items,
+            accessState: access,
+            skippedItems: skippedItems
+        )
+    }
+
+    private struct PhotoFlags: Sendable {
+        var hasQRCode: Bool
+        var isBlurry: Bool
+    }
+
     private struct PhotoMeasurement {
         var bytes: Int64
         var digest: String
-        var data: Data?
         var name: String
         var isScreenshot: Bool
     }
 
-    private static func loadPhoto(_ asset: PHAsset) async -> PhotoMeasurement? {
-        let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .fullSizePhoto })
-            ?? resources.first(where: { $0.type == .photo }) else {
+    private static func measurePhotoMetadata(_ asset: PHAsset) async -> PhotoMeasurement? {
+        guard let resource = AssetSizeMeasurement.primaryResource(for: asset) else {
             return nil
         }
 
-        // Fetching the original data gives an exact byte count, an exact hash
-        // for duplicate detection, and the pixels Vision needs. iCloud items
-        // are downloaded on demand; the scan stays cancellable throughout.
-        guard let measured = await loadResourceData(
-            resource,
-            allowNetwork: true,
-            keepData: true
-        ), measured.bytes > 0 else {
-            return nil
+        // PhotoKit exposes the resource's size without transferring the image,
+        // including for iCloud-optimised libraries. Only fall back to counting
+        // bytes when that value is unavailable. The shared measurement also
+        // includes Live Photo motion and edit data, so it matches Home exactly.
+        var bytes = AssetSizeMeasurement.measure(asset)?.bytes
+
+        if bytes == nil,
+           let counted = await loadResourceData(
+               resource,
+               allowNetwork: false,
+               keepData: false
+           ), counted.bytes > 0 {
+            bytes = counted.bytes
         }
+
+        guard let bytes, bytes > 0 else { return nil }
+
+        let name = resource.originalFilename
+
+        // True copies share a size, pixel geometry and filename. Comparing
+        // that metadata avoids hashing every original, which was the single
+        // slowest part of the old scan.
+        let fingerprint = "\(bytes)|\(asset.pixelWidth)x\(asset.pixelHeight)|\(name)"
+        let digest = SHA256.hash(data: Data(fingerprint.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
 
         return PhotoMeasurement(
-            bytes: measured.bytes,
-            digest: measured.digest,
-            data: measured.data,
-            name: resource.originalFilename,
+            bytes: bytes,
+            digest: digest,
+            name: name,
             isScreenshot: asset.mediaSubtypes.contains(.photoScreenshot)
         )
+    }
+
+    /// Runs QR and blur detection with a small worker pool so a large library
+    /// uses several cores instead of analysing one photo at a time.
+    private static func analyzePhotos(
+        items: [OverviewItem],
+        assetsByID: [String: PHAsset],
+        progress: @escaping ProgressHandler
+    ) async -> [String: PhotoFlags] {
+        let total = items.count
+        guard total > 0 else { return [:] }
+
+        var flags: [String: PhotoFlags] = [:]
+        flags.reserveCapacity(total)
+
+        let workerCount = max(2, min(8, ProcessInfo.processInfo.activeProcessorCount))
+        var completed = 0
+
+        await withTaskGroup(of: (String, PhotoFlags).self) { group in
+            var nextIndex = 0
+
+            func submitNext() {
+                while nextIndex < items.count {
+                    let item = items[nextIndex]
+                    nextIndex += 1
+
+                    guard let asset = assetsByID[item.id] else { continue }
+
+                    group.addTask {
+                        (item.id, await analyzePhoto(asset))
+                    }
+                    return
+                }
+            }
+
+            for _ in 0..<workerCount {
+                submitNext()
+            }
+
+            while let (id, flag) = await group.next() {
+                flags[id] = flag
+                completed += 1
+
+                if completed % 8 == 0 || completed == total {
+                    await progress(Double(completed) / Double(total))
+                }
+
+                if Task.isCancelled {
+                    group.cancelAll()
+                    break
+                }
+
+                submitNext()
+            }
+        }
+
+        return flags
+    }
+
+    private static func analyzePhoto(_ asset: PHAsset) async -> PhotoFlags {
+        guard let image = await thumbnail(for: asset) else {
+            return PhotoFlags(hasQRCode: false, isBlurry: false)
+        }
+
+        return PhotoFlags(
+            hasQRCode: containsQRCode(image),
+            isBlurry: isBlurry(image)
+        )
+    }
+
+    /// Returns a small, already-decoded thumbnail. Network access is disabled,
+    /// so an iCloud-only photo is skipped instead of downloading the original.
+    private static func thumbnail(for asset: PHAsset) async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            let gate = ImageRequestGate(continuation)
+            let options = PHImageRequestOptions()
+            options.isNetworkAccessAllowed = false
+            options.deliveryMode = .fastFormat
+            options.resizeMode = .fast
+            options.version = .current
+
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: 256, height: 256),
+                contentMode: .aspectFit,
+                options: options
+            ) { image, info in
+                // Keep the thumbnail the scan already decoded. The category
+                // pages then show real previews instantly instead of loading
+                // the same image again (and flashing a placeholder).
+                if let image {
+                    ThumbnailCache.store(
+                        image,
+                        forAsset: asset.localIdentifier
+                    )
+                }
+
+                if let cgImage = image?.cgImage {
+                    gate.resume(cgImage)
+                    return
+                }
+
+                let isDegraded = (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue ?? false
+                let wasCancelled = (info?[PHImageCancelledKey] as? NSNumber)?.boolValue ?? false
+                let failed = info?[PHImageErrorKey] != nil
+
+                if !isDegraded || wasCancelled || failed {
+                    gate.resume(nil)
+                }
+            }
+        }
     }
 
     private struct VideoMeasurement {
@@ -174,33 +350,13 @@ enum OverviewScanner {
     }
 
     private static func measureVideo(_ asset: PHAsset) async -> VideoMeasurement? {
-        let resources = PHAssetResource.assetResources(for: asset)
-        guard let resource = resources.first(where: { $0.type == .fullSizeVideo })
-            ?? resources.first(where: { $0.type == .video }) else {
+        // Use the exact same measurement as Home and the Photos list, so the
+        // Videos page total always matches the Videos legend on Home.
+        guard let measurement = AssetSizeMeasurement.measure(asset) else {
             return nil
         }
 
-        let name = resource.originalFilename
-        var bytes: Int64?
-
-        // A normal local video can be measured from its AVURLAsset without
-        // reading the whole file. Live Photo paired videos and some sandboxed
-        // assets do not expose a URL, so fall back to counting the bytes that
-        // PhotoKit streams to us.
-        if let url = await videoURL(for: asset),
-           let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = (attributes[.size] as? NSNumber)?.int64Value,
-           size > 0 {
-            bytes = size
-        } else if let measured = await loadResourceData(
-            resource,
-            allowNetwork: false,
-            keepData: false
-        ), measured.bytes > 0 {
-            bytes = measured.bytes
-        }
-
-        guard let bytes else { return nil }
+        let bytes = measurement.bytes
 
         // Comparing the same stable metadata for both measurement paths keeps
         // duplicate detection consistent without reading every video twice.
@@ -213,26 +369,9 @@ enum OverviewScanner {
         return VideoMeasurement(
             bytes: bytes,
             digest: digest,
-            name: name,
+            name: measurement.name,
             isScreenRecording: asset.mediaSubtypes.contains(.videoScreenRecording)
         )
-    }
-
-    private static func videoURL(for asset: PHAsset) async -> URL? {
-        await withCheckedContinuation { continuation in
-            let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = false
-            options.deliveryMode = .fastFormat
-
-            PHImageManager.default().requestAVAsset(
-                forVideo: asset,
-                options: options
-            ) { avAsset, _, _ in
-                continuation.resume(
-                    returning: (avAsset as? AVURLAsset)?.url
-                )
-            }
-        }
     }
 
     private static func report(
@@ -363,24 +502,6 @@ enum OverviewScanner {
     }
 
     // MARK: - Image analysis
-
-    private static func thumbnailImage(from data: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
-            return nil
-        }
-
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 1024
-        ]
-
-        return CGImageSourceCreateThumbnailAtIndex(
-            source,
-            0,
-            options as CFDictionary
-        )
-    }
 
     private static func containsQRCode(_ image: CGImage) -> Bool {
         let request = VNDetectBarcodesRequest()
@@ -518,6 +639,24 @@ enum OverviewScanner {
 }
 
 // MARK: - Small thread-safe helpers
+
+private final class ImageRequestGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<CGImage?, Never>?
+
+    init(_ continuation: CheckedContinuation<CGImage?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ image: CGImage?) {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(returning: image)
+    }
+}
 
 private final class ResourceDataGate: @unchecked Sendable {
     private let lock = NSLock()

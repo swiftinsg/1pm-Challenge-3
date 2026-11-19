@@ -8,7 +8,6 @@ import SwiftUI
 struct HomeView: View {
     let snapshot: StorageSnapshot
     let onSelectCategory: (StorageCategory) -> Void
-    let onSelectCleanCategory: (StorageCategory) -> Void
     let onRequestPhotoAccess: () -> Void
 
     var body: some View {
@@ -21,7 +20,8 @@ struct HomeView: View {
                 VStack(spacing: 0) {
                     StorageLegendView(
                         usages: snapshot.categories,
-                        isLoading: !snapshot.isLoaded
+                        isLoading: !snapshot.isLoaded,
+                        onSelect: onSelectCategory
                     )
                     .padding(.horizontal, 24)
                     .padding(.top, 6)
@@ -71,14 +71,10 @@ struct HomeView: View {
                         .padding(.top, 16)
                     }
 
-                    Spacer(minLength: 84)
+                    Spacer(minLength: 24)
                 }
                 .frame(width: proxy.size.width, height: proxy.size.height)
             }
-        }
-        .overlay(alignment: .bottom) {
-            HomeTabBar(onSelectCategory: onSelectCleanCategory)
-                .padding(.bottom, 8)
         }
         .toolbar(.hidden, for: .navigationBar)
     }

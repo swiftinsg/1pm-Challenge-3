@@ -3,10 +3,8 @@
 //  1pm Challenge 3
 //
 
-import Photos
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 /// Detail page for one overview category. The item list, selection, filters
 /// and deletion all live on this page, so choosing "Select" no longer pushes a
@@ -24,6 +22,8 @@ struct OverviewCategoryDetailView: View {
     @State private var showDeleteConfirmation = false
     @State private var errorMessage: String?
     @State private var previewRequest: ItemPreviewRequest?
+    @State private var deletionProgress: DeletionProgress?
+    @State private var bannerDismissTask: Task<Void, Never>?
 
     private let destructiveColor = Color(hex: 0xDC2626)
 
@@ -44,6 +44,20 @@ struct OverviewCategoryDetailView: View {
 
     private var selectedBytes: Int64 {
         selectedItems.reduce(0) { $0 + $1.bytes }
+    }
+
+    /// The header keeps matching the list after items are removed, even while
+    /// the full library rescan is still running in the background.
+    private var remainingItemCount: Int {
+        usage.items.reduce(0) { count, item in
+            count + (deletedIDs.contains(item.id) ? 0 : 1)
+        }
+    }
+
+    private var remainingBytes: Int64 {
+        usage.items.reduce(Int64(0)) { total, item in
+            total + (deletedIDs.contains(item.id) ? 0 : item.bytes)
+        }
     }
 
     private var isAllSelected: Bool {
@@ -95,9 +109,17 @@ struct OverviewCategoryDetailView: View {
                 .padding(.horizontal, 24)
             }
             .allowsHitTesting(!isDeleting)
-
-            if isDeleting {
-                deletingOverlay
+        }
+        .overlay(alignment: .bottom) {
+            if let deletionProgress {
+                DeletionStatusBanner(progress: deletionProgress)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, isSelecting ? 80 : 16)
+                    .allowsHitTesting(false)
+                    .transition(
+                        .move(edge: .bottom)
+                            .combined(with: .opacity)
+                    )
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -162,33 +184,26 @@ struct OverviewCategoryDetailView: View {
 
     private var header: some View {
         VStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(usage.category.color.opacity(0.12))
-                    .frame(width: 82, height: 82)
-
-                Circle()
-                    .stroke(usage.category.color.opacity(0.2), lineWidth: 1)
-                    .frame(width: 82, height: 82)
-
-                Image(systemName: usage.category.symbolName)
-                    .font(.system(size: 31, weight: .medium))
-                    .foregroundStyle(usage.category.color)
-            }
+            CategoryPreviewThumbnail(
+                item: visibleItems.first,
+                tint: usage.category.color,
+                symbolName: usage.category.symbolName,
+                size: 82
+            )
 
             Text(usage.category.title)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
 
-            Text(usage.formattedSize)
+            Text(StorageFormatter.compact(remainingBytes))
                 .font(.system(size: 44, weight: .semibold, design: .rounded))
                 .tracking(-1)
                 .monospacedDigit()
                 .foregroundStyle(.primary)
 
             HStack(spacing: 7) {
-                Text(usage.itemCount == 1 ? "1 item" : "\(usage.itemCount) items")
+                Text(remainingItemCount == 1 ? "1 item" : "\(remainingItemCount) items")
                 Circle()
                     .fill(AppTheme.tertiaryText)
                     .frame(width: 3, height: 3)
@@ -216,6 +231,10 @@ struct OverviewCategoryDetailView: View {
                 }
             } label: {
                 HStack(spacing: 12) {
+                    if isSelecting {
+                        selectionIndicator(isSelected: isSelected)
+                    }
+
                     OverviewItemThumbnail(
                         item: item,
                         tint: usage.category.color
@@ -241,10 +260,6 @@ struct OverviewCategoryDetailView: View {
                     }
 
                     Spacer(minLength: 8)
-
-                    if isSelecting {
-                        selectionIndicator(isSelected: isSelected)
-                    }
                 }
                 .padding(.vertical, 9)
                 .contentShape(Rectangle())
@@ -473,28 +488,6 @@ struct OverviewCategoryDetailView: View {
             : "Tap an item to preview it. Use Select to remove items."
     }
 
-    private var deletingOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.12)
-                .ignoresSafeArea()
-
-            HStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(AppTheme.secondaryText)
-
-                Text("Deleting…")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(AppTheme.secondaryText)
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 16)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        }
-        .transition(.opacity)
-    }
-
     // MARK: - Actions
 
     private func toggleSelectionMode() {
@@ -533,10 +526,61 @@ struct OverviewCategoryDetailView: View {
         isDeleting = true
         defer { isDeleting = false }
 
-        let outcome = await ItemDeletion.delete(selectedItems)
+        let items = selectedItems
+        guard !items.isEmpty else { return }
+
+        // One Live Activity for the whole selection, no matter how many items
+        // are removed. The same progress drives the in-app popup.
+        let started = DeletionProgress(
+            completed: 0,
+            total: items.count,
+            bytes: 0,
+            isFinished: false
+        )
+        DeletionActivityController.shared.start(totalItems: items.count)
+
+        bannerDismissTask?.cancel()
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            deletionProgress = started
+        }
+
+        let outcome = await ItemDeletion.delete(items) { completed, bytes in
+            let update = DeletionProgress(
+                completed: completed,
+                total: items.count,
+                bytes: bytes,
+                isFinished: false
+            )
+
+            withAnimation(.easeOut(duration: 0.2)) {
+                deletionProgress = update
+            }
+            DeletionActivityController.shared.update(update)
+        }
 
         deletedIDs.formUnion(outcome.deletedIDs)
         selectedIDs.subtract(outcome.deletedIDs)
+
+        let finished = DeletionProgress(
+            completed: outcome.deletedIDs.count,
+            total: items.count,
+            bytes: outcome.deletedBytes,
+            isFinished: true
+        )
+        DeletionActivityController.shared.finish(finished)
+
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            deletionProgress = finished
+        }
+
+        bannerDismissTask = Task {
+            try? await Task.sleep(for: .seconds(1.8))
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeOut(duration: 0.3)) {
+                deletionProgress = nil
+            }
+        }
 
         if !outcome.deletedIDs.isEmpty {
             await onItemsDeleted()
@@ -555,6 +599,14 @@ struct OverviewItemThumbnail: View {
     let tint: Color
 
     @State private var image: UIImage?
+
+    init(item: OverviewItem, tint: Color) {
+        self.item = item
+        self.tint = tint
+        // Start from the shared cache so photos thumbnailed during the scan
+        // appear immediately, with no placeholder-symbol flash.
+        _image = State(initialValue: ThumbnailCache.image(for: item))
+    }
 
     var body: some View {
         ZStack {
@@ -586,70 +638,18 @@ struct OverviewItemThumbnail: View {
     }
 
     private func loadThumbnail() async {
-        if let identifier = item.assetIdentifier {
-            image = await PhotoThumbnailLoader.load(identifier: identifier)
-        } else if let url = item.fileURL, isImageFile(url) {
-            image = await Task.detached(priority: .utility) {
-                UIImage(contentsOfFile: url.path)
-            }.value
-        }
-    }
-
-    private func isImageFile(_ url: URL) -> Bool {
-        guard let type = UTType(filenameExtension: url.pathExtension) else {
-            return false
-        }
-        return type.conforms(to: .image)
-    }
-}
-
-private enum PhotoThumbnailLoader {
-    static func load(identifier: String) async -> UIImage? {
-        let assets = PHAsset.fetchAssets(
-            withLocalIdentifiers: [identifier],
-            options: nil
-        )
-        guard let asset = assets.firstObject else { return nil }
-
-        return await withCheckedContinuation { continuation in
-            let gate = ThumbnailGate(continuation)
-            let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = false
-            options.deliveryMode = .highQualityFormat
-            options.resizeMode = .fast
-
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: 140, height: 140),
-                contentMode: .aspectFill,
-                options: options
-            ) { image, _ in
-                gate.finish(image)
-            }
-        }
-    }
-}
-
-private final class ThumbnailGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<UIImage?, Never>?
-    private var isFinished = false
-
-    init(_ continuation: CheckedContinuation<UIImage?, Never>) {
-        self.continuation = continuation
-    }
-
-    func finish(_ image: UIImage?) {
-        lock.lock()
-        guard !isFinished else {
-            lock.unlock()
+        if let cached = ThumbnailCache.image(for: item) {
+            image = cached
             return
         }
-        isFinished = true
-        let continuation = continuation
-        self.continuation = nil
-        lock.unlock()
 
-        continuation?.resume(returning: image)
+        image = nil
+
+        let loaded = await ThumbnailLoader.image(for: item)
+        guard !Task.isCancelled, let loaded else { return }
+
+        withAnimation(.easeOut(duration: 0.15)) {
+            image = loaded
+        }
     }
 }

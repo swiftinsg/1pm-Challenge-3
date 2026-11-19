@@ -61,7 +61,10 @@ struct CategoryUsage: Identifiable, Equatable {
     var id: StorageCategory { category }
 
     var formattedSize: String {
-        StorageFormatter.headline(bytes)
+        // Compact keeps sub-megabyte sizes readable instead of claiming that a
+        // category holding real bytes is "0 MB". Home, the overview pages and
+        // the item rows all use this, so the same value always reads the same.
+        StorageFormatter.compact(bytes)
     }
 
     var statusLabel: String {
@@ -151,7 +154,7 @@ struct StorageSnapshot: Equatable {
             return "No tracked media or app files"
         }
 
-        return "Tracked: \(StorageFormatter.headline(measuredBytes))"
+        return "Tracked: \(StorageFormatter.compact(measuredBytes))"
     }
 
     var accessibilitySummary: String {

@@ -14,15 +14,16 @@ struct ScanLandingView: View {
     var onFinished: () -> Void
 
     @State private var phase: ScanPhase = .idle
+    @ObservedObject private var savings = StorageSavingsStore.shared
 
     var body: some View {
         ZStack {
             AppBackground()
 
             if phase == .scanning {
-                // The scan can take a while on a large library, so show a
-                // compact sweeping broom and rotate through storage tips in
-                // the meantime instead of leaving the landing page frozen.
+                // Rotate through storage tips while the scan runs. The moment
+                // the scan finishes the caller swaps straight to Home, so the
+                // tips never hold the user back.
                 ScanningTipsView()
                     .transition(.opacity)
             } else {
@@ -36,6 +37,14 @@ struct ScanLandingView: View {
     private var landingContent: some View {
         VStack(spacing: 0) {
             Spacer(minLength: 20)
+
+            Text("Storage saved: \(savings.formattedSavings)")
+                .font(.system(size: 13, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(AppTheme.secondaryText)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: savings.savedBytes)
+                .padding(.bottom, 10)
 
             BroomHero(isSweeping: false)
                 .padding(.bottom, 24)

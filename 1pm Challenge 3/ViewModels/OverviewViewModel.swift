@@ -13,6 +13,8 @@ final class OverviewViewModel: ObservableObject {
     let kind: StorageCategory
 
     @Published private(set) var usages: [OverviewUsage] = []
+    @Published private(set) var totalBytes: Int64 = 0
+    @Published private(set) var previewItem: OverviewItem?
     @Published private(set) var accessState: PhotoAccessState
     @Published private(set) var isScanning = false
     @Published private(set) var progress: Double = 0
@@ -58,19 +60,11 @@ final class OverviewViewModel: ObservableObject {
         }
     }
 
-    /// Every item can sit in more than one displayed category, so the centre
-    /// total counts each item once instead of adding the overlapping sectors.
-    var displayedBytes: Int64 {
-        var seen = Set<String>()
-        var total: Int64 = 0
-
-        for usage in displayedUsages {
-            for item in usage.items where seen.insert(item.id).inserted {
-                total += item.bytes
-            }
-        }
-
-        return total
+    /// Every item in this category, including items that match none of the
+    /// optional breakdowns. This is the same value Home shows for the category,
+    /// so the two pages never disagree.
+    var allItemsBytes: Int64 {
+        scannedItems.reduce(Int64(0)) { $0 + $1.bytes }
     }
 
     var filterSummary: String {
@@ -149,6 +143,12 @@ final class OverviewViewModel: ObservableObject {
                 bytes: matching.reduce(Int64(0)) { $0 + $1.bytes },
                 items: matching
             )
+        }
+        totalBytes = allItemsBytes
+        // The overview centre shows a real preview instead of a generic icon,
+        // so keep the newest item from the whole category ready for it.
+        previewItem = scannedItems.max {
+            ($0.date ?? .distantPast) < ($1.date ?? .distantPast)
         }
     }
 

@@ -26,7 +26,9 @@ struct ContentView: View {
                         },
                         onFinished: {
                             path = NavigationPath()
-                            withAnimation(.easeInOut(duration: 0.45)) {
+                            // Swap to Home as soon as the scan completes;
+                            // there is no tip carousel or minimum wait.
+                            withAnimation(.easeOut(duration: 0.2)) {
                                 hasFinishedScan = true
                             }
                         }
@@ -37,11 +39,13 @@ struct ContentView: View {
             .navigationDestination(for: StorageCategory.self) { category in
                 destination(for: category)
             }
-            .navigationDestination(for: CleanCategoryRoute.self) { route in
-                destination(for: route.category)
-            }
         }
         .tint(AppTheme.accent)
+        .task {
+            // A previous run may have been terminated while a deletion Live
+            // Activity was on screen; clear it instead of leaving it stale.
+            DeletionActivityController.shared.endStaleActivities()
+        }
         .onChange(of: scenePhase) { _, phase in
             // Only refresh once the user has scanned; the landing page waits
             // for the SCAN button instead of measuring on launch.
@@ -55,9 +59,6 @@ struct ContentView: View {
             snapshot: store.snapshot,
             onSelectCategory: { category in
                 path.append(category)
-            },
-            onSelectCleanCategory: { category in
-                path.append(CleanCategoryRoute(category: category))
             },
             onRequestPhotoAccess: handlePhotoAccessRequest
         )

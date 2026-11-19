@@ -129,7 +129,7 @@ final class StorageStore: ObservableObject {
     }
 
     private static func measureMediaLibrary() async -> MediaMeasurement {
-        await Task.detached(priority: .utility) {
+        await Task.detached(priority: .userInitiated) {
             let options = PHFetchOptions()
             options.includeHiddenAssets = false
             options.includeAllBurstAssets = false
@@ -137,10 +137,25 @@ final class StorageStore: ObservableObject {
             let photoAssets = PHAsset.fetchAssets(with: .image, options: options)
             let videoAssets = PHAsset.fetchAssets(with: .video, options: options)
 
-            return MediaMeasurement(
-                photos: measure(assets: photoAssets),
-                videos: measure(assets: videoAssets)
-            )
+            // Walk the photo and video libraries at the same time. Measuring
+            // them one after another doubled the wait on the landing page.
+            return await withTaskGroup(of: (Bool, MediaBucket).self) { group in
+                group.addTask { (true, measure(assets: photoAssets)) }
+                group.addTask { (false, measure(assets: videoAssets)) }
+
+                var photos = MediaBucket(bytes: 0, complete: true)
+                var videos = MediaBucket(bytes: 0, complete: true)
+
+                for await (isPhoto, bucket) in group {
+                    if isPhoto {
+                        photos = bucket
+                    } else {
+                        videos = bucket
+                    }
+                }
+
+                return MediaMeasurement(photos: photos, videos: videos)
+            }
         }.value
     }
 
@@ -150,34 +165,15 @@ final class StorageStore: ObservableObject {
 
         assets.enumerateObjects { asset, _, _ in
             autoreleasepool {
-                let resources = PHAssetResource.assetResources(for: asset)
-                let isVideo = asset.mediaType == .video
-                let primaryType: PHAssetResourceType = isVideo ? .fullSizeVideo : .fullSizePhoto
-                let fallbackType: PHAssetResourceType = isVideo ? .video : .photo
-
-                guard let resource = resources.first(where: { $0.type == primaryType })
-                    ?? resources.first(where: { $0.type == fallbackType }) else {
+                // Counts the primary file, Live Photo motion, edit data and an
+                // alternate RAW representation together, exactly like the
+                // category pages do.
+                guard let measurement = AssetSizeMeasurement.measure(asset) else {
                     complete = false
                     return
                 }
 
-                guard let size = resource.measuredFileSize else {
-                    complete = false
-                    return
-                }
-                bytes += size
-
-                // A Live Photo is a still plus a short paired video. Count the
-                // paired portion when PhotoKit can report it.
-                if !isVideo,
-                   asset.mediaSubtypes.contains(.photoLive),
-                   let pairedVideo = resources.first(where: { $0.type == .pairedVideo }) {
-                    if let pairedSize = pairedVideo.measuredFileSize {
-                        bytes += pairedSize
-                    } else {
-                        complete = false
-                    }
-                }
+                bytes += measurement.bytes
             }
         }
 
@@ -204,15 +200,23 @@ final class StorageStore: ObservableObject {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         let keys: Set<URLResourceKey> = [
             .volumeTotalCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey,
             .volumeAvailableCapacityKey
         ]
 
         if let values = try? home.resourceValues(forKeys: keys),
            let total = values.volumeTotalCapacity {
-            // Use plain available capacity, not the "important usage" value.
-            // The latter includes purgeable space and makes "used" look much
-            // larger than the figure shown in Settings.
-            let available = values.volumeAvailableCapacity.map { Int64($0) }
+            // Prefer the capacity iOS reports for important usage: it includes
+            // purgeable space, which is the figure Settings counts as free.
+            // The plain available value is still used when that key is missing
+            // or reports zero.
+            let importantUsage = values.volumeAvailableCapacityForImportantUsage ?? 0
+            let plainAvailable = Int64(values.volumeAvailableCapacity ?? 0)
+
+            let available: Int64? = importantUsage > 0
+                ? importantUsage
+                : (plainAvailable > 0 ? plainAvailable : nil)
+
             return (
                 Int64(total),
                 available.map { max(0, Int64(total) - $0) }
@@ -252,7 +256,7 @@ final class StorageStore: ObservableObject {
         guard let enumerator = fileManager.enumerator(
             at: documents,
             includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
             errorHandler: { _, _ in true }
         ) else {
             return 0
@@ -285,20 +289,4 @@ private struct MediaBucket: Sendable {
 private struct MediaMeasurement: Sendable {
     var photos: MediaBucket
     var videos: MediaBucket
-}
-
-private extension PHAssetResource {
-    /// PhotoKit does not publish a public size property. Reading the resource's
-    /// `fileSize` key is the least invasive way to obtain the actual local size;
-    /// when it is unavailable the category is reported as estimated instead.
-    var measuredFileSize: Int64? {
-        let selector = NSSelectorFromString("fileSize")
-        guard responds(to: selector),
-              let number = value(forKey: "fileSize") as? NSNumber else {
-            return nil
-        }
-
-        let size = number.int64Value
-        return size > 0 ? size : nil
-    }
 }
