@@ -43,7 +43,6 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A400000000000000000000A4 /* 1pm Challenge 3 */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = "1pm Challenge 3"; sourceTree = "<group>"; };
-		C200000000000000000000C2 /* DeletionActivity */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = DeletionActivity; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,7 +68,6 @@
 			children = (
 				0CCAC6EC30B00B47000926A6 /* Spacer Icon 2.icon */,
 				A400000000000000000000A4 /* 1pm Challenge 3 */,
-				C200000000000000000000C2 /* DeletionActivity */,
 				A600000000000000000000A6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -121,9 +119,6 @@
 			buildRules = (
 			);
 			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				C200000000000000000000C2 /* DeletionActivity */,
 			);
 			name = DeletionActivity;
 			packageProductDependencies = (
