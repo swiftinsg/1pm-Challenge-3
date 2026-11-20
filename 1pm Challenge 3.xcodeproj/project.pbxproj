@@ -42,6 +42,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		1D03C52530B021BC004859BA /* DeletionActivity */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = DeletionActivity; sourceTree = "<group>"; };
 		A400000000000000000000A4 /* 1pm Challenge 3 */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = "1pm Challenge 3"; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
@@ -68,6 +69,7 @@
 			children = (
 				0CCAC6EC30B00B47000926A6 /* Spacer Icon 2.icon */,
 				A400000000000000000000A4 /* 1pm Challenge 3 */,
+				1D03C52530B021BC004859BA /* DeletionActivity */,
 				A600000000000000000000A6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -119,6 +121,9 @@
 			buildRules = (
 			);
 			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1D03C52530B021BC004859BA /* DeletionActivity */,
 			);
 			name = DeletionActivity;
 			packageProductDependencies = (
