@@ -421,6 +421,7 @@
 				DEVELOPMENT_TEAM = XL5JK4F896;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DeletionActivityInfo.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Deletion;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -451,6 +452,7 @@
 				DEVELOPMENT_TEAM = XL5JK4F896;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = DeletionActivityInfo.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Deletion;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
