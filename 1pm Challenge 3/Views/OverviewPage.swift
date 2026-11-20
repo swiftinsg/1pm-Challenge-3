@@ -161,7 +161,6 @@ struct OverviewPage: View {
                 kind: kind,
                 usages: viewModel.displayedUsages,
                 totalBytes: viewModel.totalBytes,
-                previewItem: viewModel.previewItem,
                 filterSummary: viewModel.filterSummary,
                 diameter: diameter
             ) { category in

@@ -22,7 +22,6 @@ struct OverviewDonutChartView: View {
     let kind: StorageCategory
     let usages: [OverviewUsage]
     let totalBytes: Int64
-    let previewItem: OverviewItem?
     let filterSummary: String
     let diameter: CGFloat
     let onSelectCategory: (OverviewCategory) -> Void
@@ -120,14 +119,6 @@ struct OverviewDonutChartView: View {
 
     private var centreLabel: some View {
         VStack(spacing: 3) {
-            CategoryPreviewThumbnail(
-                item: previewItem,
-                tint: kind.color,
-                symbolName: kind.symbolName,
-                size: 30
-            )
-            .padding(.bottom, 3)
-
             Text(StorageFormatter.compact(totalBytes))
                 .font(.system(size: 42, weight: .semibold, design: .rounded))
                 .tracking(-1.2)

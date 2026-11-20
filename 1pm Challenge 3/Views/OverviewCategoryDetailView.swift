@@ -202,13 +202,6 @@ struct OverviewCategoryDetailView: View {
 
     private var header: some View {
         VStack(spacing: 12) {
-            CategoryPreviewThumbnail(
-                item: visibleItems.first,
-                tint: tint,
-                symbolName: symbolName,
-                size: 82
-            )
-
             Text(title)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.primary)

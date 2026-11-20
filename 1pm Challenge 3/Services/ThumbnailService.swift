@@ -3,10 +3,13 @@
 //  1pm Challenge 3
 //
 
+import AVFoundation
 import Foundation
+import ImageIO
 import Photos
 import QuickLookThumbnailing
 import UIKit
+import UniformTypeIdentifiers
 
 /// Shared, cost-limited memory cache for the small previews shown in category
 /// headers, overview centres and item rows. Using one cache means a thumbnail
@@ -97,24 +100,17 @@ enum ThumbnailLoader {
         )
         guard let asset = assets.firstObject else { return nil }
 
-        let image = await withCheckedContinuation { continuation in
-            let gate = ThumbnailGate(continuation)
-            let options = PHImageRequestOptions()
-            // iCloud-only photos should still show their picture.
-            options.isNetworkAccessAllowed = true
-            options.version = .current
-            // A 256 px fast thumbnail is enough for every small preview and
-            // arrives in a fraction of the time of a full-quality decode.
-            options.deliveryMode = .fastFormat
-            options.resizeMode = .fast
+        // The fast thumbnail request is cheapest, but some libraries (and the
+        // iOS 27 simulator) answer it with "No resource found matching image
+        // request spec". Falling back to the asset's image data or video
+        // poster frame keeps every row showing the real item.
+        var image = await requestedImage(for: asset)
 
-            PHImageManager.default().requestImage(
-                for: asset,
-                targetSize: CGSize(width: pixelSize, height: pixelSize),
-                contentMode: .aspectFill,
-                options: options
-            ) { image, _ in
-                gate.finish(image)
+        if image == nil {
+            if asset.mediaType == .video {
+                image = await videoPosterFrame(for: asset)
+            } else {
+                image = await imageThumbnailFromData(for: asset)
             }
         }
 
@@ -131,7 +127,26 @@ enum ThumbnailLoader {
             return cached
         }
 
-        let image = await withCheckedContinuation { continuation in
+        // Image files are decoded from their own contents first. Quick Look can
+        // return a generic document icon for imported images, which makes the
+        // row look empty even though the file contains a picture.
+        var image: UIImage?
+        if isImageFile(url) {
+            image = downsampledImage(from: url)
+        }
+        if image == nil {
+            image = await quickLookThumbnail(for: url)
+        }
+
+        if let image {
+            ThumbnailCache.store(image, forFile: url)
+        }
+
+        return image
+    }
+
+    private static func quickLookThumbnail(for url: URL) async -> UIImage? {
+        await withCheckedContinuation { continuation in
             let request = QLThumbnailGenerator.Request(
                 fileAt: url,
                 size: CGSize(width: pixelSize, height: pixelSize),
@@ -145,12 +160,142 @@ enum ThumbnailLoader {
                 continuation.resume(returning: representation?.uiImage)
             }
         }
+    }
 
-        if let image {
-            ThumbnailCache.store(image, forFile: url)
+    private static func isImageFile(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension) else {
+            return false
         }
 
-        return image
+        return type.conforms(to: .image)
+    }
+
+    // MARK: - PhotoKit fallbacks
+
+    private static func requestedImage(for asset: PHAsset) async -> UIImage? {
+        await withCheckedContinuation { continuation in
+            let gate = ThumbnailGate(continuation)
+            let options = PHImageRequestOptions()
+            // iCloud-only photos should still show their picture.
+            options.isNetworkAccessAllowed = true
+            options.version = .current
+            // High-quality delivery with fast resizing matches the request
+            // that produced reliable row previews before the overview rework.
+            options.deliveryMode = .highQualityFormat
+            options.resizeMode = .fast
+
+            PHImageManager.default().requestImage(
+                for: asset,
+                targetSize: CGSize(width: pixelSize, height: pixelSize),
+                contentMode: .aspectFill,
+                options: options
+            ) { image, _ in
+                gate.finish(image)
+            }
+        }
+    }
+
+    private static func imageThumbnailFromData(for asset: PHAsset) async -> UIImage? {
+        let data: Data? = await withCheckedContinuation { continuation in
+            let options = PHImageRequestOptions()
+            options.isNetworkAccessAllowed = true
+            options.version = .current
+            options.deliveryMode = .highQualityFormat
+            options.resizeMode = .none
+
+            PHImageManager.default().requestImageDataAndOrientation(
+                for: asset,
+                options: options
+            ) { data, _, _, _ in
+                continuation.resume(returning: data)
+            }
+        }
+
+        guard let data else { return nil }
+        return downsampledImage(from: data)
+    }
+
+    private static func videoPosterFrame(for asset: PHAsset) async -> UIImage? {
+        let avAsset: AVAsset? = await withCheckedContinuation { continuation in
+            let options = PHVideoRequestOptions()
+            options.isNetworkAccessAllowed = true
+            options.deliveryMode = .automatic
+
+            PHImageManager.default().requestAVAsset(
+                forVideo: asset,
+                options: options
+            ) { avAsset, _, _ in
+                continuation.resume(returning: avAsset)
+            }
+        }
+
+        guard let avAsset else { return nil }
+
+        let generator = AVAssetImageGenerator(asset: avAsset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: pixelSize, height: pixelSize)
+
+        let duration = avAsset.duration.seconds
+        let seconds = duration.isFinite ? min(max(duration * 0.1, 0), 1) : 0
+
+        do {
+            let (cgImage, _) = try await generator.image(
+                at: CMTime(seconds: seconds, preferredTimescale: 600)
+            )
+            return UIImage(cgImage: cgImage)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func downsampledImage(
+        from data: Data,
+        maxPixelSize: CGFloat = pixelSize
+    ) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(
+            data as CFData,
+            [kCGImageSourceShouldCache: false] as CFDictionary
+        ) else {
+            return nil
+        }
+
+        return thumbnail(from: source, maxPixelSize: maxPixelSize)
+    }
+
+    private static func downsampledImage(
+        from url: URL,
+        maxPixelSize: CGFloat = pixelSize
+    ) -> UIImage? {
+        guard let source = CGImageSourceCreateWithURL(
+            url as CFURL,
+            [kCGImageSourceShouldCache: false] as CFDictionary
+        ) else {
+            return nil
+        }
+
+        return thumbnail(from: source, maxPixelSize: maxPixelSize)
+    }
+
+    private static func thumbnail(
+        from source: CGImageSource,
+        maxPixelSize: CGFloat
+    ) -> UIImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            options as CFDictionary
+        ) else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage)
     }
 }
 

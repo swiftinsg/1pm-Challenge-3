@@ -14,7 +14,6 @@ final class OverviewViewModel: ObservableObject {
 
     @Published private(set) var usages: [OverviewUsage] = []
     @Published private(set) var totalBytes: Int64 = 0
-    @Published private(set) var previewItem: OverviewItem?
     @Published private(set) var accessState: PhotoAccessState
     @Published private(set) var isScanning = false
     @Published private(set) var progress: Double = 0
@@ -165,11 +164,6 @@ final class OverviewViewModel: ObservableObject {
             )
         }
         totalBytes = allItemsBytes
-        // The overview centre shows a real preview instead of a generic icon,
-        // so keep the newest item from the whole category ready for it.
-        previewItem = scannedItems.max {
-            ($0.date ?? .distantPast) < ($1.date ?? .distantPast)
-        }
     }
 
     // MARK: - Scanning
