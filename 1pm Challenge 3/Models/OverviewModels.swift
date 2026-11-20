@@ -162,6 +162,54 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// Adjective form used to build combined titles such as
+    /// "Large and Blurry Photos". Categories that already read as nouns
+    /// (Screenshots, Downloads) return nil.
+    var combiningName: String? {
+        switch self {
+        case .largePhotos, .largeVideos, .largeFiles:
+            return "Large"
+        case .outdatedPhotos, .outdatedVideos, .outdatedFiles:
+            return "Outdated"
+        case .blurryPhotos:
+            return "Blurry"
+        case .duplicatePhotos, .duplicateVideos, .duplicateFiles:
+            return "Duplicate"
+        case .screenshots, .qrCodes, .screenRecordings, .downloads:
+            return nil
+        }
+    }
+
+    /// Title for a detail page showing several filtered categories at once,
+    /// e.g. "Large and Blurry Photos" or "Large Photos and Screenshots".
+    static func combinedTitle(
+        for categories: Set<OverviewCategory>,
+        kind: StorageCategory
+    ) -> String {
+        let ordered = self.categories(for: kind).filter { categories.contains($0) }
+
+        guard let first = ordered.first else { return kind.title }
+        guard ordered.count > 1 else { return first.title }
+        guard ordered.count < self.categories(for: kind).count else {
+            return "All \(kind.title)"
+        }
+
+        if ordered.allSatisfy({ $0.combiningName != nil }) {
+            let names = ordered.compactMap(\.combiningName)
+            return "\(list(names)) \(kind.title)"
+        }
+
+        return list(ordered.map(\.title))
+    }
+
+    private static func list(_ names: [String]) -> String {
+        guard let last = names.last else { return "" }
+        guard names.count > 2 else {
+            return names.count == 1 ? last : "\(names[0]) and \(last)"
+        }
+        return names.dropLast().joined(separator: ", ") + ", and \(last)"
+    }
+
     static func categories(for kind: StorageCategory) -> [OverviewCategory] {
         allCases.filter { $0.kind == kind }
     }

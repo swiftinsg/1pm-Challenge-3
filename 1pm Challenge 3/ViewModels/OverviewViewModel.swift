@@ -108,6 +108,26 @@ final class OverviewViewModel: ObservableObject {
             ?? OverviewUsage(category: category, bytes: 0, items: [])
     }
 
+    /// Detail page for a filtered set of categories. An item can match more
+    /// than one category (for example a large, blurry photo), so items are
+    /// de-duplicated by id before the bytes are summed.
+    func combinedUsage(for categories: Set<OverviewCategory>) -> OverviewUsage? {
+        let ordered = allCategories.filter { categories.contains($0) }
+        guard let primary = ordered.first else { return nil }
+
+        var seen = Set<String>()
+        var matching: [OverviewItem] = []
+
+        for category in ordered {
+            for item in usage(for: category).items where seen.insert(item.id).inserted {
+                matching.append(item)
+            }
+        }
+
+        let bytes = matching.reduce(Int64(0)) { $0 + $1.bytes }
+        return OverviewUsage(category: primary, bytes: bytes, items: matching)
+    }
+
     var outdatedCategory: OverviewCategory {
         OverviewCategory.outdatedCategory(for: kind)
     }

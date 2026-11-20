@@ -16,7 +16,7 @@ struct OverviewPage: View {
 
     @StateObject private var viewModel: OverviewViewModel
     @State private var showFilters = false
-    @State private var detailCategory: OverviewCategory?
+    @State private var detailCategories: Set<OverviewCategory>?
     @State private var isImporting = false
     @State private var importError: String?
 
@@ -33,12 +33,23 @@ struct OverviewPage: View {
         ZStack {
             AppBackground()
 
-            if let category = detailCategory {
+            if let categories = detailCategories,
+               let usage = viewModel.combinedUsage(for: categories) {
                 // The item list replaces the chart on the same page instead
-                // of being pushed as a separate screen.
+                // of being pushed as a separate screen. A filtered selection
+                // can span several categories, so the page receives a title
+                // and tint that describe the whole selection.
+                let isCombined = categories.count > 1
+
                 OverviewCategoryDetailView(
                     kind: kind,
-                    usage: viewModel.usage(for: category),
+                    usage: usage,
+                    displayTitle: OverviewCategory.combinedTitle(
+                        for: categories,
+                        kind: kind
+                    ),
+                    displayColor: isCombined ? kind.color : nil,
+                    displaySymbolName: isCombined ? kind.symbolName : nil,
                     onBack: showChart
                 ) {
                     await onLibraryChanged?()
@@ -63,13 +74,13 @@ struct OverviewPage: View {
                 .transition(.opacity)
             }
         }
-        .navigationTitle(detailCategory?.title ?? kind.title)
+        .navigationTitle(detailTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(detailCategory != nil)
+        .navigationBarBackButtonHidden(detailCategories != nil)
         .toolbar(.visible, for: .navigationBar)
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
-            if detailCategory == nil {
+            if detailCategories == nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         showFilters = true
@@ -94,6 +105,14 @@ struct OverviewPage: View {
             ) { selection, threshold in
                 viewModel.applyFilters(selection)
                 viewModel.applyOutdatedThreshold(threshold)
+
+                // Applying a filter jumps straight to the matching item list
+                // instead of returning to the chart. An empty selection means
+                // "show everything" in the chart, so it stays there.
+                guard !selection.isEmpty else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    detailCategories = viewModel.selectedCategories
+                }
             }
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -130,7 +149,7 @@ struct OverviewPage: View {
         VStack(spacing: 0) {
             OverviewLegendView(usages: viewModel.displayedUsages) { category in
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    detailCategory = category
+                    detailCategories = [category]
                 }
             }
             .padding(.horizontal, 24)
@@ -147,7 +166,7 @@ struct OverviewPage: View {
                 diameter: diameter
             ) { category in
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    detailCategory = category
+                    detailCategories = [category]
                 }
             }
 
@@ -375,9 +394,14 @@ struct OverviewPage: View {
         return min(widthLimit, heightLimit, 340)
     }
 
+    private var detailTitle: String {
+        guard let categories = detailCategories else { return kind.title }
+        return OverviewCategory.combinedTitle(for: categories, kind: kind)
+    }
+
     private func showChart() {
         withAnimation(.easeInOut(duration: 0.2)) {
-            detailCategory = nil
+            detailCategories = nil
         }
     }
 }

@@ -6,12 +6,18 @@
 import SwiftUI
 import UIKit
 
-/// Detail page for one overview category. The item list, selection, filters
-/// and deletion all live on this page, so choosing "Select" no longer pushes a
-/// separate screen.
+/// Detail page for one overview category, or for a combined filter selection.
+/// The item list, selection and deletion all live on this page, so choosing
+/// "Select" no longer pushes a separate screen.
 struct OverviewCategoryDetailView: View {
     let kind: StorageCategory
     let usage: OverviewUsage
+    /// Optional overrides so this page can also present a combined filter
+    /// selection (for example "Large and Blurry Photos") instead of a single
+    /// category.
+    var displayTitle: String? = nil
+    var displayColor: Color? = nil
+    var displaySymbolName: String? = nil
     var onBack: (() -> Void)?
     var onItemsDeleted: () async -> Void = {}
 
@@ -26,6 +32,18 @@ struct OverviewCategoryDetailView: View {
     @State private var bannerDismissTask: Task<Void, Never>?
 
     private let destructiveColor = Color(hex: 0xDC2626)
+
+    private var title: String {
+        displayTitle ?? usage.category.title
+    }
+
+    private var tint: Color {
+        displayColor ?? usage.category.color
+    }
+
+    private var symbolName: String {
+        displaySymbolName ?? usage.category.symbolName
+    }
 
     private var sortedItems: [OverviewItem] {
         usage.items.sorted {
@@ -186,12 +204,12 @@ struct OverviewCategoryDetailView: View {
         VStack(spacing: 12) {
             CategoryPreviewThumbnail(
                 item: visibleItems.first,
-                tint: usage.category.color,
-                symbolName: usage.category.symbolName,
+                tint: tint,
+                symbolName: symbolName,
                 size: 82
             )
 
-            Text(usage.category.title)
+            Text(title)
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.primary)
                 .multilineTextAlignment(.center)
@@ -237,7 +255,7 @@ struct OverviewCategoryDetailView: View {
 
                     OverviewItemThumbnail(
                         item: item,
-                        tint: usage.category.color
+                        tint: tint
                     )
 
                     VStack(alignment: .leading, spacing: 3) {
@@ -306,12 +324,12 @@ struct OverviewCategoryDetailView: View {
     private func selectionIndicator(isSelected: Bool) -> some View {
         ZStack {
             Circle()
-                .fill(isSelected ? usage.category.color : .clear)
+                .fill(isSelected ? tint : .clear)
                 .frame(width: 22, height: 22)
 
             Circle()
                 .strokeBorder(
-                    isSelected ? usage.category.color : Color.primary.opacity(0.18),
+                    isSelected ? tint : Color.primary.opacity(0.18),
                     lineWidth: 1.5
                 )
                 .frame(width: 22, height: 22)
