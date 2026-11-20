@@ -12,6 +12,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var path = NavigationPath()
     @State private var hasFinishedScan = false
+    @AppStorage("hasCompletedTutorial") private var hasCompletedTutorial = false
+    @State private var isShowingTutorial = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -41,6 +43,19 @@ struct ContentView: View {
             }
         }
         .tint(AppTheme.accent)
+        .fullScreenCover(isPresented: $isShowingTutorial) {
+            TutorialView {
+                hasCompletedTutorial = true
+                isShowingTutorial = false
+            }
+        }
+        .onAppear {
+            // Show the tour only on the very first launch. The flag is stored
+            // in UserDefaults, so later launches skip straight to the landing
+            // page.
+            guard !hasCompletedTutorial else { return }
+            isShowingTutorial = true
+        }
         .task {
             // A previous run may have been terminated while a deletion Live
             // Activity was on screen; clear it instead of leaving it stale.
