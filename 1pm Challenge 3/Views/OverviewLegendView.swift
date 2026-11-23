@@ -9,6 +9,7 @@ import SwiftUI
 /// that are actually drawn, so the key always matches the chart.
 struct OverviewLegendView: View {
     let usages: [OverviewUsage]
+    var anchors: [OverviewCategory: CoachAnchor] = [:]
     let onSelect: (OverviewCategory) -> Void
 
     private let columns = [
@@ -52,6 +53,7 @@ struct OverviewLegendView: View {
                     )
                 }
                 .buttonStyle(.plain)
+                .coachAnchor(anchors[usage.category])
                 .accessibilityLabel(
                     "\(usage.category.title), \(usage.formattedSize)"
                 )

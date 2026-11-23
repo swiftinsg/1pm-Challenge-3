@@ -139,6 +139,7 @@ struct DonutChartView: View {
     let snapshot: StorageSnapshot
     let diameter: CGFloat
     let onSelectCategory: (StorageCategory) -> Void
+    var anchors: [StorageCategory: CoachAnchor] = [:]
 
     @State private var reveal: Double = 0
     @State private var hasAnimated = false
@@ -190,6 +191,14 @@ struct DonutChartView: View {
                 .allowsHitTesting(false)
         }
         .frame(width: diameter, height: diameter)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: CoachArcKey.self,
+                    value: arcSpotlights(chartFrame: proxy.frame(in: .global))
+                )
+            }
+        )
         .contentShape(Circle())
         .onTapGesture(coordinateSpace: .local) { location in
             handleTap(at: location)
@@ -218,6 +227,29 @@ struct DonutChartView: View {
     }
 
     // MARK: - Centre
+
+    /// Reports the full arc of every spotlighted segment, so the walkthrough
+    /// highlights the segment at its real size instead of a small marker.
+    private func arcSpotlights(chartFrame: CGRect) -> [CoachAnchor: CoachArcSpotlight] {
+        guard !anchors.isEmpty else { return [:] }
+
+        var result: [CoachAnchor: CoachArcSpotlight] = [:]
+        let radius = diameter / 2 - style.ringWidth / 2
+        let center = CGPoint(x: chartFrame.midX, y: chartFrame.midY)
+
+        for segment in segments {
+            guard let anchor = anchors[segment.usage.category] else { continue }
+            result[anchor] = CoachArcSpotlight(
+                center: center,
+                radius: radius,
+                thickness: style.ringWidth,
+                startDegrees: segment.startDegrees,
+                endDegrees: segment.endDegrees
+            )
+        }
+
+        return result
+    }
 
     private var centreLabel: some View {
         VStack(spacing: 4) {

@@ -12,6 +12,7 @@
     /// styling and navigation behaviour.
     struct OverviewPage: View {
         let kind: StorageCategory
+        var onGoHome: (() -> Void)?
         var onLibraryChanged: (() async -> Void)?
 
         @StateObject private var viewModel: OverviewViewModel
@@ -22,9 +23,11 @@
 
         init(
             kind: StorageCategory,
+            onGoHome: (() -> Void)? = nil,
             onLibraryChanged: (() async -> Void)? = nil
         ) {
             self.kind = kind
+            self.onGoHome = onGoHome
             self.onLibraryChanged = onLibraryChanged
             _viewModel = StateObject(wrappedValue: OverviewViewModel(kind: kind))
         }
@@ -50,7 +53,8 @@
                         ),
                         displayColor: isCombined ? kind.color : nil,
                         displaySymbolName: isCombined ? kind.symbolName : nil,
-                        onBack: showChart
+                        onBack: showChart,
+                        onGoHome: onGoHome
                     ) {
                         await onLibraryChanged?()
                         viewModel.rescan()
@@ -83,6 +87,10 @@
                 if detailCategories == nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
+                            CoachController.shared.advance(
+                                from: .filterButton,
+                                to: .filterOutdated
+                            )
                             showFilters = true
                         } label: {
                             Image(systemName: "line.3.horizontal.decrease")
@@ -91,6 +99,7 @@
                                                  ? AppTheme.accent
                                                  : Color.primary)
                         }
+                        .coachAnchor(.filterButton)
                         .tint(.primary)
                         .accessibilityLabel("Filter \(kind.title)")
                     }
@@ -114,7 +123,11 @@
                         detailCategories = viewModel.selectedCategories
                     }
                 }
-                .presentationDetents([.medium, .large])
+                .presentationDetents(
+                    CoachController.shared.isRunning
+                        ? Set([.large])
+                        : Set([.medium, .large])
+                )
                 .presentationDragIndicator(.visible)
             }
             .fileImporter(
@@ -147,7 +160,14 @@
 
         private func content(diameter: CGFloat) -> some View {
             VStack(spacing: 0) {
-                OverviewLegendView(usages: viewModel.displayedUsages) { category in
+                OverviewLegendView(
+                    usages: viewModel.displayedUsages,
+                    anchors: [.largePhotos: .overviewLargeLegend]
+                ) { category in
+                    CoachController.shared.advance(
+                        from: .categoryLegend,
+                        to: .selectButton
+                    )
                     withAnimation(.easeInOut(duration: 0.2)) {
                         detailCategories = [category]
                     }
@@ -162,12 +182,18 @@
                     usages: viewModel.displayedUsages,
                     totalBytes: viewModel.totalBytes,
                     filterSummary: viewModel.filterSummary,
-                    diameter: diameter
-                ) { category in
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        detailCategories = [category]
-                    }
-                }
+                    diameter: diameter,
+                    onSelectCategory: { category in
+                        CoachController.shared.advance(
+                            from: .categoryLegend,
+                            to: .selectButton
+                        )
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            detailCategories = [category]
+                        }
+                    },
+                    anchors: [.largePhotos: .overviewLargeSegment]
+                )
 
                 if kind == .files {
                     addFilesButton

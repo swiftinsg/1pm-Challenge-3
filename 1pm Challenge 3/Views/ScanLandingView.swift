@@ -11,11 +11,21 @@ import UIKit
 /// donut Home page as soon as the scan finishes.
 struct ScanLandingView: View {
     var autoScanToken: Int = 0
+    var photosGranted: Bool = true
+    var filesGranted: Bool = true
+    var onAllowPhotos: () -> Void = {}
+    var onAllowFiles: () -> Void = {}
+    var onSkipPermissions: () -> Void = {}
     var onScan: () async -> Void
     var onFinished: () -> Void
 
     @State private var phase: ScanPhase = .idle
+    @State private var permissionsDismissed = false
     @ObservedObject private var savings = StorageSavingsStore.shared
+
+    private var needsPermissions: Bool {
+        (!photosGranted || !filesGranted) && !permissionsDismissed
+    }
 
     var body: some View {
         ZStack {
@@ -61,7 +71,10 @@ struct ScanLandingView: View {
                 .padding(.bottom, 10)
 
             BroomHero(isSweeping: false)
-                .padding(.bottom, 24)
+                .padding(.bottom, needsPermissions ? 12 : 24)
+                .opacity(needsPermissions ? 0 : 1)
+                .frame(height: needsPermissions ? 0 : nil)
+                .clipped()
 
             Text("Clean up your storage")
                 .font(.system(size: 31, weight: .semibold, design: .rounded))
@@ -76,7 +89,26 @@ struct ScanLandingView: View {
                 .padding(.top, 9)
                 .padding(.horizontal, 40)
 
-            Spacer(minLength: 28)
+            if needsPermissions {
+                PermissionPromptView(
+                    photosGranted: photosGranted,
+                    filesGranted: filesGranted,
+                    onAllowPhotos: onAllowPhotos,
+                    onAllowFiles: onAllowFiles,
+                    onNotNow: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            permissionsDismissed = true
+                        }
+                        onSkipPermissions()
+                    }
+                )
+                .coachAnchor(.permissionStack)
+                .padding(.horizontal, 22)
+                .padding(.top, 18)
+                .transition(.opacity)
+            }
+
+            Spacer(minLength: 24)
 
             scanButton
 
@@ -108,6 +140,7 @@ struct ScanLandingView: View {
         }
         .buttonStyle(.plain)
         .disabled(phase != .idle)
+        .coachAnchor(.scanButton)
         .padding(.horizontal, 44)
         .accessibilityLabel(accessibilityLabel)
     }
@@ -157,6 +190,9 @@ struct ScanLandingView: View {
     @MainActor
     private func startScan() {
         guard phase == .idle else { return }
+
+        // The walkthrough waits on the SCAN tap; hide it while scanning runs.
+        CoachController.shared.beginScanning()
 
         withAnimation(.easeInOut(duration: 0.25)) {
             phase = .scanning

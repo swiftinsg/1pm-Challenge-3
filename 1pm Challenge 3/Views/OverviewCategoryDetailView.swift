@@ -19,6 +19,7 @@ struct OverviewCategoryDetailView: View {
     var displayColor: Color? = nil
     var displaySymbolName: String? = nil
     var onBack: (() -> Void)?
+    var onGoHome: (() -> Void)?
     var onItemsDeleted: () async -> Void = {}
 
     @State private var isSelecting = false
@@ -29,6 +30,7 @@ struct OverviewCategoryDetailView: View {
     @State private var errorMessage: String?
     @State private var previewRequest: ItemPreviewRequest?
     @State private var deletionProgress: DeletionProgress?
+    @State private var deletionSummary: DeletionSummary?
     @State private var bannerDismissTask: Task<Void, Never>?
 
     private let destructiveColor = Color(hex: 0xDC2626)
@@ -162,11 +164,18 @@ struct OverviewCategoryDetailView: View {
 
             ToolbarItem(placement: .topBarTrailing) {
                 Button(isSelecting ? "Done" : "Select") {
+                    if !isSelecting {
+                        CoachController.shared.advance(
+                            from: .selectButton,
+                            to: .selectItem
+                        )
+                    }
                     toggleSelectionMode()
                 }
                 .font(.system(size: 15, weight: .semibold))
                 .tint(.primary)
                 .disabled(usage.items.isEmpty)
+                .coachAnchor(.detailSelectButton)
                 .accessibilityHint(isSelecting
                                    ? "Leaves selection mode"
                                    : "Choose items to delete")
@@ -194,6 +203,20 @@ struct OverviewCategoryDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
+        }
+        .sheet(item: $deletionSummary) { summary in
+            DeletionSuccessSheet(
+                summary: summary,
+                onBackHome: {
+                    deletionSummary = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        onGoHome?()
+                    }
+                },
+                onKeepCleaning: {
+                    deletionSummary = nil
+                }
+            )
         }
         .itemPreview(request: $previewRequest)
     }
@@ -243,7 +266,7 @@ struct OverviewCategoryDetailView: View {
             } label: {
                 HStack(spacing: 12) {
                     if isSelecting {
-                        selectionIndicator(isSelected: isSelected)
+                        selectionIndicator(isSelected: isSelected, index: index)
                     }
 
                     OverviewItemThumbnail(
@@ -314,7 +337,7 @@ struct OverviewCategoryDetailView: View {
         .accessibilityHint("Opens a preview of this item")
     }
 
-    private func selectionIndicator(isSelected: Bool) -> some View {
+    private func selectionIndicator(isSelected: Bool, index: Int) -> some View {
         ZStack {
             Circle()
                 .fill(isSelected ? tint : .clear)
@@ -334,6 +357,7 @@ struct OverviewCategoryDetailView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: isSelected)
+        .coachAnchor(index == 0 ? .detailFirstSelect : nil)
         .accessibilityHidden(true)
     }
 
@@ -409,7 +433,12 @@ struct OverviewCategoryDetailView: View {
 
     private var deleteButton: some View {
         Button {
-            showDeleteConfirmation = true
+            // The tour explains deletion without actually removing anything.
+            if CoachController.shared.step == .deleteButton {
+                CoachController.shared.advance(from: .deleteButton, to: .finish)
+            } else {
+                showDeleteConfirmation = true
+            }
         } label: {
             HStack(spacing: 8) {
                 if isDeleting {
@@ -434,6 +463,7 @@ struct OverviewCategoryDetailView: View {
         }
         .buttonStyle(.plain)
         .disabled(selectedIDs.isEmpty || isDeleting)
+        .coachAnchor(.detailDeleteButton)
         .accessibilityLabel(deleteButtonTitle)
         .accessibilityHint("Deletes the selected items")
     }
@@ -511,6 +541,8 @@ struct OverviewCategoryDetailView: View {
     }
 
     private func toggleSelection(_ item: OverviewItem) {
+        CoachController.shared.advance(from: .selectItem, to: .deleteButton)
+
         withAnimation(.easeInOut(duration: 0.15)) {
             if selectedIDs.contains(item.id) {
                 selectedIDs.remove(item.id)
@@ -584,12 +616,24 @@ struct OverviewCategoryDetailView: View {
             deletionProgress = finished
         }
 
+        let summary = DeletionSummary(
+            count: outcome.deletedIDs.count,
+            bytes: outcome.deletedBytes,
+            isFiles: kind == .files
+        )
+
         bannerDismissTask = Task {
             try? await Task.sleep(for: .seconds(1.8))
             guard !Task.isCancelled else { return }
 
             withAnimation(.easeOut(duration: 0.3)) {
                 deletionProgress = nil
+            }
+
+            // Show the result only after the progress popup has had its
+            // moment, so the two never compete for attention.
+            if !outcome.deletedIDs.isEmpty {
+                deletionSummary = summary
             }
         }
 

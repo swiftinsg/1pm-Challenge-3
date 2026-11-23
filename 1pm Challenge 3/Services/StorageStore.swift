@@ -11,8 +11,8 @@ import Photos
 /// It never walks the whole filesystem and never invents missing values.
 final class StorageStore: ObservableObject {
     @Published private(set) var snapshot: StorageSnapshot = .loading
-
-    private var isRefreshing = false
+    /// True while a scan is running, so Settings can show inline progress.
+    @Published private(set) var isRefreshing = false
     private var lastRefresh: Date?
     private var lastAuthorizationStatus: PHAuthorizationStatus?
 

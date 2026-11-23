@@ -15,6 +15,7 @@ struct OverviewFilterSheet: View {
     let onApply: (Set<OverviewCategory>, OutdatedThreshold) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var coach = CoachController.shared
     @State private var selection: Set<OverviewCategory>
     @State private var threshold: OutdatedThreshold
 
@@ -45,6 +46,23 @@ struct OverviewFilterSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // During the tour the instructions sit above the filter list,
+                // so they never cover the rows, the age menu or Apply.
+                if let step = coach.step, step.showsInlineCard {
+                    CoachInstructionCard(
+                        step: step,
+                        showsContinue: step.showsContinueButton,
+                        onSkip: { coach.finish() },
+                        onContinue: { coach.advanceToNext() },
+                        onFinish: { coach.finish() }
+                    )
+                    .coachAnchor(.coachCard)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 2)
+                    .transition(.opacity)
+                }
+
                 selectionControls
 
                 ScrollView {
@@ -80,8 +98,13 @@ struct OverviewFilterSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
+                        CoachController.shared.advance(
+                            from: .filterCancel,
+                            to: .categoryLegend
+                        )
                         dismiss()
                     }
+                    .coachAnchor(.filterCancelButton)
                     .foregroundStyle(AppTheme.secondaryText)
                 }
             }
@@ -89,6 +112,7 @@ struct OverviewFilterSheet: View {
                 applyBar
             }
         }
+        .coachOverlay(showsCard: false)
     }
 
     // MARK: - Controls
@@ -123,6 +147,13 @@ struct OverviewFilterSheet: View {
             } else {
                 selection.insert(category)
             }
+
+            if category == outdatedCategory {
+                CoachController.shared.advance(
+                    from: .filterOutdated,
+                    to: .filterThreshold
+                )
+            }
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: category.symbolName)
@@ -155,6 +186,7 @@ struct OverviewFilterSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .coachAnchor(category == outdatedCategory ? .filterOutdatedRow : nil)
         .accessibilityValue(isSelected ? "Selected" : "Not selected")
     }
 
@@ -185,6 +217,7 @@ struct OverviewFilterSheet: View {
         }
         .padding(.leading, 34)
         .padding(.vertical, 4)
+        .coachAnchor(.filterThresholdRow)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Outdated means older than \(threshold.title)")
     }

@@ -11,21 +11,26 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @StateObject private var store = StorageStore()
     @ObservedObject private var library = DocumentLibrary.shared
+    @ObservedObject private var coach = CoachController.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var path = NavigationPath()
     @State private var hasFinishedScan: Bool
-    @AppStorage("hasCompletedTutorial") private var hasCompletedTutorial = false
-    @State private var isShowingTutorial = false
+    @AppStorage("hasCompletedCoachTour") private var hasCompletedCoachTour = false
     @State private var isChoosingFolder = false
+    @State private var showSettings = false
     @State private var folderError: String?
-    @State private var didPromptForFolder = false
     @State private var didAutoScan = false
     @State private var autoScanToken = 0
+    @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
 
     init() {
         // Restore the last completed scan so a returning user lands on Home
         // immediately instead of watching the same scan again.
         _hasFinishedScan = State(initialValue: ScanCache.hasSnapshot())
+    }
+
+    private var photosGranted: Bool {
+        photoStatus == .authorized || photoStatus == .limited
     }
 
     var body: some View {
@@ -37,6 +42,13 @@ struct ContentView: View {
                 } else {
                     ScanLandingView(
                         autoScanToken: autoScanToken,
+                        photosGranted: photosGranted,
+                        filesGranted: library.hasFolderAccess,
+                        onAllowPhotos: requestPhotoAccessForScan,
+                        onAllowFiles: { isChoosingFolder = true },
+                        onSkipPermissions: {
+                            coach.advance(from: .permissions, to: .scan)
+                        },
                         onScan: {
                             await store.refresh(requestAccess: true)
                         },
@@ -57,14 +69,20 @@ struct ContentView: View {
             }
         }
         .tint(AppTheme.accent)
-        .fullScreenCover(
-            isPresented: $isShowingTutorial,
-            onDismiss: handleTutorialDismissed
-        ) {
-            TutorialView {
-                hasCompletedTutorial = true
-                isShowingTutorial = false
-            }
+        .coachOverlay()
+        .sheet(isPresented: $showSettings) {
+            SettingsSheet(
+                store: store,
+                onReplayTour: {
+                    path = NavigationPath()
+                    if hasFinishedScan {
+                        coach.startAtHome()
+                    } else {
+                        coach.start()
+                    }
+                },
+                onRequestPhotoAccess: requestPhotoAccessForScan
+            )
         }
         .fileImporter(
             isPresented: $isChoosingFolder,
@@ -97,8 +115,31 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .active, hasFinishedScan else { return }
+            guard phase == .active else { return }
+
+            photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            advancePermissionStepIfReady()
+
+            guard hasFinishedScan else { return }
             Task { await store.refreshIfNeeded() }
+        }
+        .onChange(of: photoStatus) { _, _ in
+            advancePermissionStepIfReady()
+        }
+        .onChange(of: library.folders) { _, _ in
+            advancePermissionStepIfReady()
+        }
+        .onChange(of: hasFinishedScan) { _, finished in
+            guard finished else { return }
+            coach.resumeAfterScan()
+        }
+        .onChange(of: path.count) { _, count in
+            guard count > 0 else { return }
+            coach.advance(from: .homeChart, to: .filterButton)
+        }
+        .onChange(of: coach.completionToken) { _, _ in
+            hasCompletedCoachTour = true
+            path = NavigationPath()
         }
     }
 
@@ -108,7 +149,8 @@ struct ContentView: View {
             onSelectCategory: { category in
                 path.append(category)
             },
-            onRequestPhotoAccess: handlePhotoAccessRequest
+            onRequestPhotoAccess: handlePhotoAccessRequest,
+            onOpenSettings: { showSettings = true }
         )
     }
 
@@ -116,15 +158,24 @@ struct ContentView: View {
     private func destination(for category: StorageCategory) -> some View {
         switch category {
         case .photos:
-            OverviewPage(kind: .photos) {
+            OverviewPage(
+                kind: .photos,
+                onGoHome: { path = NavigationPath() }
+            ) {
                 await store.refresh()
             }
         case .videos:
-            OverviewPage(kind: .videos) {
+            OverviewPage(
+                kind: .videos,
+                onGoHome: { path = NavigationPath() }
+            ) {
                 await store.refresh()
             }
         case .files:
-            OverviewPage(kind: .files) {
+            OverviewPage(
+                kind: .files,
+                onGoHome: { path = NavigationPath() }
+            ) {
                 await store.refresh()
             }
         }
@@ -133,41 +184,31 @@ struct ContentView: View {
     // MARK: - Launch
 
     private func handleAppear() {
-        guard !hasCompletedTutorial else {
-            promptForFolderIfNeeded()
+        photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+
+        guard !hasCompletedCoachTour else {
             startAutoScanIfPossible()
             return
         }
 
-        // Show the tour only on the very first launch. The flag is stored in
-        // UserDefaults, so later launches skip straight to the landing page.
-        isShowingTutorial = true
-    }
-
-    private func handleTutorialDismissed() {
-        promptForFolderIfNeeded()
-        startAutoScanIfPossible()
-    }
-
-    /// Asks for On My iPhone access once per launch when no folder has been
-    /// granted. iOS does not allow an app to grant itself the Files root, so
-    /// the system picker is the only way to open it in place.
-    private func promptForFolderIfNeeded() {
-        guard !didPromptForFolder, !library.hasFolderAccess else { return }
-
-        didPromptForFolder = true
-
-        // Let the first screen finish appearing before presenting the picker.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-            isChoosingFolder = true
+        // First launch goes straight to the landing page with the interactive
+        // walkthrough layered on top. There is no separate tutorial screen.
+        if hasFinishedScan {
+            coach.startAtHome()
+        } else {
+            coach.start()
         }
+
+        advancePermissionStepIfReady()
     }
 
+    /// Starts a scan automatically only after the tour is done and a folder is
+    /// already allowed. During the tour the user taps SCAN themselves.
     private func startAutoScanIfPossible() {
         guard !hasFinishedScan,
               !didAutoScan,
               library.hasFolderAccess,
-              !isShowingTutorial else {
+              !coach.isRunning else {
             return
         }
 
@@ -201,14 +242,42 @@ struct ContentView: View {
         }
     }
 
-    private func handlePhotoAccessRequest() {
+    private func requestPhotoAccessForScan() {
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
 
-        if status == .notDetermined {
-            Task { await store.requestPhotoAccess() }
+        // iOS only shows the system prompt once. After a denial the user has
+        // to turn access back on in Settings.
+        if status == .denied || status == .restricted {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+            return
+        }
+
+        Task {
+            await store.requestPhotoAccess()
+            photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            advancePermissionStepIfReady()
+        }
+    }
+
+    private func handlePhotoAccessRequest() {
+        if photoStatus == .notDetermined {
+            requestPhotoAccessForScan()
         } else if let url = URL(string: UIApplication.openSettingsURLString) {
             UIApplication.shared.open(url)
         }
+    }
+
+    /// Both permissions are in, so the tour moves to the SCAN button.
+    private func advancePermissionStepIfReady() {
+        guard coach.step == .permissions,
+              photosGranted,
+              library.hasFolderAccess else {
+            return
+        }
+
+        coach.advance(from: .permissions, to: .scan)
     }
 }
 

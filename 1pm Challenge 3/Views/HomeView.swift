@@ -9,6 +9,7 @@ struct HomeView: View {
     let snapshot: StorageSnapshot
     let onSelectCategory: (StorageCategory) -> Void
     let onRequestPhotoAccess: () -> Void
+    let onOpenSettings: () -> Void
 
     var body: some View {
         ZStack {
@@ -18,20 +19,24 @@ struct HomeView: View {
                 let diameter = chartDiameter(for: proxy.size)
 
                 VStack(spacing: 0) {
+                    header
+
                     StorageLegendView(
                         usages: snapshot.categories,
                         isLoading: !snapshot.isLoaded,
-                        onSelect: onSelectCategory
+                        onSelect: onSelectCategory,
+                        anchors: [.photos: .homePhotosLegend]
                     )
                     .padding(.horizontal, 24)
-                    .padding(.top, 6)
+                    .padding(.top, 14)
 
                     Spacer(minLength: 12)
 
                     DonutChartView(
                         snapshot: snapshot,
                         diameter: diameter,
-                        onSelectCategory: onSelectCategory
+                        onSelectCategory: onSelectCategory,
+                        anchors: [.photos: .homePhotosSegment]
                     )
 
                     StorageCapacityBar(
@@ -77,6 +82,41 @@ struct HomeView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("This iPhone")
+                    .font(.system(size: 20, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+
+                Text("Storage at a glance")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(AppTheme.tertiaryText)
+            }
+
+            Spacer(minLength: 0)
+
+            Button(action: onOpenSettings) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
+                    .background(
+                        Circle()
+                            .fill(AppTheme.surface)
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(AppTheme.hairline, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Settings")
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 4)
     }
 
     private func chartDiameter(for size: CGSize) -> CGFloat {

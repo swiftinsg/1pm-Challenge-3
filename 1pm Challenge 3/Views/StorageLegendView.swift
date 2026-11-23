@@ -13,6 +13,7 @@ struct StorageLegendView: View {
     let usages: [CategoryUsage]
     let isLoading: Bool
     let onSelect: (StorageCategory) -> Void
+    var anchors: [StorageCategory: CoachAnchor] = [:]
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -53,6 +54,7 @@ struct StorageLegendView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(isLoading)
+                .coachAnchor(anchors[usage.category])
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(accessibilityLabel(for: usage))
                 .accessibilityHint("Opens the \(usage.category.title) page")

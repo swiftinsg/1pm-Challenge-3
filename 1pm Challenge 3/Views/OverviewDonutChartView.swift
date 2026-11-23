@@ -25,6 +25,7 @@ struct OverviewDonutChartView: View {
     let filterSummary: String
     let diameter: CGFloat
     let onSelectCategory: (OverviewCategory) -> Void
+    var anchors: [OverviewCategory: CoachAnchor] = [:]
 
     @State private var reveal: Double = 0
     @State private var hasAnimated = false
@@ -97,6 +98,14 @@ struct OverviewDonutChartView: View {
                 .allowsHitTesting(false)
         }
         .frame(width: diameter, height: diameter)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: CoachArcKey.self,
+                    value: arcSpotlights(chartFrame: proxy.frame(in: .global))
+                )
+            }
+        )
         .contentShape(Circle())
         .onTapGesture(coordinateSpace: .local) { location in
             handleTap(at: location)
@@ -116,6 +125,28 @@ struct OverviewDonutChartView: View {
     }
 
     // MARK: - Centre
+
+    /// Reports the full arc of every spotlighted slice.
+    private func arcSpotlights(chartFrame: CGRect) -> [CoachAnchor: CoachArcSpotlight] {
+        guard !anchors.isEmpty else { return [:] }
+
+        var result: [CoachAnchor: CoachArcSpotlight] = [:]
+        let radius = diameter / 2 - style.ringWidth / 2
+        let center = CGPoint(x: chartFrame.midX, y: chartFrame.midY)
+
+        for slice in slices {
+            guard let anchor = anchors[slice.usage.category] else { continue }
+            result[anchor] = CoachArcSpotlight(
+                center: center,
+                radius: radius,
+                thickness: style.ringWidth,
+                startDegrees: slice.startDegrees,
+                endDegrees: slice.endDegrees
+            )
+        }
+
+        return result
+    }
 
     private var centreLabel: some View {
         VStack(spacing: 3) {
