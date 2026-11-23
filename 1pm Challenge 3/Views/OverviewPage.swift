@@ -17,8 +17,8 @@
         @StateObject private var viewModel: OverviewViewModel
         @State private var showFilters = false
         @State private var detailCategories: Set<OverviewCategory>?
-        @State private var isImporting = false
-        @State private var importError: String?
+        @State private var isChoosingFolder = false
+        @State private var folderError: String?
 
         init(
             kind: StorageCategory,
@@ -118,22 +118,22 @@
                 .presentationDragIndicator(.visible)
             }
             .fileImporter(
-                isPresented: $isImporting,
-                allowedContentTypes: [.item],
+                isPresented: $isChoosingFolder,
+                allowedContentTypes: [.folder],
                 allowsMultipleSelection: true
             ) { result in
-                handleImport(result)
+                handleFolderSelection(result)
             }
             .alert(
-                "Couldn’t add files",
+                "Couldn’t access that folder",
                 isPresented: Binding(
-                    get: { importError != nil },
-                    set: { if !$0 { importError = nil } }
+                    get: { folderError != nil },
+                    set: { if !$0 { folderError = nil } }
                 )
             ) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text(importError ?? "")
+                Text(folderError ?? "")
             }
             .task {
                 viewModel.scanIfNeeded()
@@ -175,20 +175,22 @@
                 }
 
                 if viewModel.isScanning {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(AppTheme.secondaryText)
-                        .padding(.top, 12)
+                    VStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                            .tint(AppTheme.secondaryText)
+
+                        Text("Large libraries can take a while to scan.")
+                            .font(.system(size: 11, weight: .regular))
+                            .foregroundStyle(AppTheme.tertiaryText)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.top, 12)
                 }
 
                 if viewModel.accessState.isLimited {
                     limitedAccessNote
                         .padding(.top, 14)
-                }
-
-                if viewModel.skippedItems > 0 {
-                    skippedItemsNote
-                        .padding(.top, 7)
                 }
 
                 Spacer(minLength: 24)
@@ -294,12 +296,12 @@
 
         private var addFilesButton: some View {
             Button {
-                isImporting = true
+                isChoosingFolder = true
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.badge.plus")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Add files from On My iPhone")
+                    Text("Choose folders on On My iPhone")
                 }
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color(uiColor: .systemBackground))
@@ -336,16 +338,6 @@
             )
         }
 
-        private var skippedItemsNote: some View {
-            HStack(spacing: 5) {
-                Image(systemName: "icloud.slash")
-                    .font(.system(size: 10, weight: .semibold))
-                Text("\(viewModel.skippedItems) items couldn’t be read.")
-                    .font(.system(size: 11, weight: .regular))
-            }
-            .foregroundStyle(AppTheme.tertiaryText)
-        }
-
         // MARK: - Actions
 
         private func handlePermissionAction() {
@@ -365,22 +357,26 @@
             UIApplication.shared.open(url)
         }
 
-        private func handleImport(_ result: Result<[URL], Error>) {
+        private func handleFolderSelection(_ result: Result<[URL], Error>) {
             switch result {
             case .failure(let error):
                 if (error as NSError).code != NSUserCancelledError {
-                    importError = error.localizedDescription
+                    folderError = error.localizedDescription
                 }
 
             case .success(let urls):
+                guard !urls.isEmpty else { return }
+
                 do {
-                    try DocumentLibrary.copyImportedFiles(from: urls)
+                    for url in urls {
+                        try DocumentLibrary.shared.addFolder(url)
+                    }
                     Task {
                         await onLibraryChanged?()
                         viewModel.rescan()
                     }
                 } catch {
-                    importError = error.localizedDescription
+                    folderError = error.localizedDescription
                 }
             }
         }

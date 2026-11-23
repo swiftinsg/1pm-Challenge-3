@@ -6,14 +6,27 @@
 import SwiftUI
 import Photos
 import UIKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var store = StorageStore()
+    @ObservedObject private var library = DocumentLibrary.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var path = NavigationPath()
-    @State private var hasFinishedScan = false
+    @State private var hasFinishedScan: Bool
     @AppStorage("hasCompletedTutorial") private var hasCompletedTutorial = false
     @State private var isShowingTutorial = false
+    @State private var isChoosingFolder = false
+    @State private var folderError: String?
+    @State private var didPromptForFolder = false
+    @State private var didAutoScan = false
+    @State private var autoScanToken = 0
+
+    init() {
+        // Restore the last completed scan so a returning user lands on Home
+        // immediately instead of watching the same scan again.
+        _hasFinishedScan = State(initialValue: ScanCache.hasSnapshot())
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -23,6 +36,7 @@ struct ContentView: View {
                         .transition(.opacity)
                 } else {
                     ScanLandingView(
+                        autoScanToken: autoScanToken,
                         onScan: {
                             await store.refresh(requestAccess: true)
                         },
@@ -43,27 +57,46 @@ struct ContentView: View {
             }
         }
         .tint(AppTheme.accent)
-        .fullScreenCover(isPresented: $isShowingTutorial) {
+        .fullScreenCover(
+            isPresented: $isShowingTutorial,
+            onDismiss: handleTutorialDismissed
+        ) {
             TutorialView {
                 hasCompletedTutorial = true
                 isShowingTutorial = false
             }
         }
-        .onAppear {
-            // Show the tour only on the very first launch. The flag is stored
-            // in UserDefaults, so later launches skip straight to the landing
-            // page.
-            guard !hasCompletedTutorial else { return }
-            isShowingTutorial = true
+        .fileImporter(
+            isPresented: $isChoosingFolder,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: true
+        ) { result in
+            handleFolderSelection(result)
         }
+        .alert(
+            "Couldn’t access that folder",
+            isPresented: Binding(
+                get: { folderError != nil },
+                set: { if !$0 { folderError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(folderError ?? "")
+        }
+        .onAppear(perform: handleAppear)
         .task {
             // A previous run may have been terminated while a deletion Live
             // Activity was on screen; clear it instead of leaving it stale.
             DeletionActivityController.shared.endStaleActivities()
+
+            // Cached values are already on screen. Refresh quietly if they
+            // have gone stale.
+            if hasFinishedScan {
+                await store.refreshIfNeeded()
+            }
         }
         .onChange(of: scenePhase) { _, phase in
-            // Only refresh once the user has scanned; the landing page waits
-            // for the SCAN button instead of measuring on launch.
             guard phase == .active, hasFinishedScan else { return }
             Task { await store.refreshIfNeeded() }
         }
@@ -93,6 +126,77 @@ struct ContentView: View {
         case .files:
             OverviewPage(kind: .files) {
                 await store.refresh()
+            }
+        }
+    }
+
+    // MARK: - Launch
+
+    private func handleAppear() {
+        guard !hasCompletedTutorial else {
+            promptForFolderIfNeeded()
+            startAutoScanIfPossible()
+            return
+        }
+
+        // Show the tour only on the very first launch. The flag is stored in
+        // UserDefaults, so later launches skip straight to the landing page.
+        isShowingTutorial = true
+    }
+
+    private func handleTutorialDismissed() {
+        promptForFolderIfNeeded()
+        startAutoScanIfPossible()
+    }
+
+    /// Asks for On My iPhone access once per launch when no folder has been
+    /// granted. iOS does not allow an app to grant itself the Files root, so
+    /// the system picker is the only way to open it in place.
+    private func promptForFolderIfNeeded() {
+        guard !didPromptForFolder, !library.hasFolderAccess else { return }
+
+        didPromptForFolder = true
+
+        // Let the first screen finish appearing before presenting the picker.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            isChoosingFolder = true
+        }
+    }
+
+    private func startAutoScanIfPossible() {
+        guard !hasFinishedScan,
+              !didAutoScan,
+              library.hasFolderAccess,
+              !isShowingTutorial else {
+            return
+        }
+
+        didAutoScan = true
+        autoScanToken += 1
+    }
+
+    private func handleFolderSelection(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            if (error as NSError).code != NSUserCancelledError {
+                folderError = error.localizedDescription
+            }
+
+        case .success(let urls):
+            guard !urls.isEmpty else { return }
+
+            do {
+                for url in urls {
+                    try library.addFolder(url)
+                }
+
+                if hasFinishedScan {
+                    Task { await store.refresh() }
+                } else {
+                    startAutoScanIfPossible()
+                }
+            } catch {
+                folderError = error.localizedDescription
             }
         }
     }

@@ -26,87 +26,51 @@ struct FilesDetailView: View {
     let usage: CategoryUsage
     let onLibraryChanged: () async -> Void
 
-    @State private var isImporting = false
-    @State private var importError: String?
+    @State private var isChoosingFolder = false
+    @State private var folderError: String?
 
     var body: some View {
         CategoryDetailView(usage: usage) {
-            isImporting = true
+            isChoosingFolder = true
         }
         .fileImporter(
-            isPresented: $isImporting,
-            allowedContentTypes: [.item],
+            isPresented: $isChoosingFolder,
+            allowedContentTypes: [.folder],
             allowsMultipleSelection: true
         ) { result in
-            importFiles(result)
+            handleFolderSelection(result)
         }
         .alert(
-            "Couldn’t add files",
+            "Couldn’t access that folder",
             isPresented: Binding(
-                get: { importError != nil },
-                set: { if !$0 { importError = nil } }
+                get: { folderError != nil },
+                set: { if !$0 { folderError = nil } }
             )
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(importError ?? "")
+            Text(folderError ?? "")
         }
     }
 
-    private func importFiles(_ result: Result<[URL], Error>) {
+    private func handleFolderSelection(_ result: Result<[URL], Error>) {
         switch result {
         case .failure(let error):
             if (error as NSError).code != NSUserCancelledError {
-                importError = error.localizedDescription
+                folderError = error.localizedDescription
             }
 
         case .success(let urls):
+            guard !urls.isEmpty else { return }
+
             do {
-                let documents = try FileManager.default.url(
-                    for: .documentDirectory,
-                    in: .userDomainMask,
-                    appropriateFor: nil,
-                    create: true
-                )
-
                 for url in urls {
-                    let hasAccess = url.startAccessingSecurityScopedResource()
-                    defer {
-                        if hasAccess { url.stopAccessingSecurityScopedResource() }
-                    }
-
-                    let destination = uniqueDestination(
-                        for: url.lastPathComponent,
-                        in: documents
-                    )
-                    try FileManager.default.copyItem(at: url, to: destination)
+                    try DocumentLibrary.shared.addFolder(url)
                 }
-
                 Task { await onLibraryChanged() }
             } catch {
-                importError = error.localizedDescription
+                folderError = error.localizedDescription
             }
         }
-    }
-
-    private func uniqueDestination(for name: String, in directory: URL) -> URL {
-        let fileManager = FileManager.default
-        var candidate = directory.appendingPathComponent(name)
-
-        guard fileManager.fileExists(atPath: candidate.path) else {
-            return candidate
-        }
-
-        let base = (name as NSString).deletingPathExtension
-        let ext = (name as NSString).pathExtension
-        var index = 2
-
-        repeat {
-            let filename = ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)"
-            candidate = directory.appendingPathComponent(filename)
-            index += 1
-        } while fileManager.fileExists(atPath: candidate.path)
-
-        return candidate
     }
 }

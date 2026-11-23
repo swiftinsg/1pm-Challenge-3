@@ -10,6 +10,7 @@ import UIKit
 /// storage totals are measured, then the caller replaces this screen with the
 /// donut Home page as soon as the scan finishes.
 struct ScanLandingView: View {
+    var autoScanToken: Int = 0
     var onScan: () async -> Void
     var onFinished: () -> Void
 
@@ -24,14 +25,27 @@ struct ScanLandingView: View {
                 // Rotate through storage tips while the scan runs. The moment
                 // the scan finishes the caller swaps straight to Home, so the
                 // tips never hold the user back.
-                ScanningTipsView()
-                    .transition(.opacity)
+                VStack(spacing: 0) {
+                    ScanningTipsView()
+
+                    Text("Large libraries can take a while to scan.")
+                        .font(.system(size: 12, weight: .regular))
+                        .foregroundStyle(AppTheme.tertiaryText)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 28)
+                }
+                .transition(.opacity)
             } else {
                 landingContent
                     .transition(.opacity)
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        .task(id: autoScanToken) {
+            guard autoScanToken > 0, phase == .idle else { return }
+            startScan()
+        }
     }
 
     private var landingContent: some View {
@@ -126,7 +140,7 @@ struct ScanLandingView: View {
     }
 
     private var footnote: String {
-        "Only the photos, videos and files you allow are measured.\nNothing leaves this iPhone."
+        "Only photos, videos and files already on this iPhone are measured.\nNothing is downloaded and nothing leaves this iPhone."
     }
 
     private var accessibilityLabel: String {
@@ -230,6 +244,7 @@ private struct BroomHero: View {
 
 #Preview {
     ScanLandingView(
+        autoScanToken: 0,
         onScan: {},
         onFinished: {}
     )

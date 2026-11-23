@@ -24,6 +24,7 @@ final class OverviewViewModel: ObservableObject {
 
     private var scannedItems: [OverviewItem] = []
     private var scanTask: Task<Void, Never>?
+    private var lastScanDate: Date?
 
     private static let thresholdKey = "overview.outdatedThreshold"
 
@@ -33,6 +34,17 @@ final class OverviewViewModel: ObservableObject {
 
         let stored = UserDefaults.standard.integer(forKey: Self.thresholdKey)
         self.outdatedThreshold = OutdatedThreshold(rawValue: stored) ?? .threeMonths
+
+        // Restore the previous scan immediately. The page can draw its chart
+        // and item counts before any PhotoKit or file work starts.
+        if let cached = ScanCache.loadOverview(for: kind) {
+            scannedItems = cached.items
+            accessState = cached.accessState
+            skippedItems = cached.skippedItems
+            lastScanDate = cached.updatedAt
+            hasScanned = true
+            rebuildUsages()
+        }
     }
 
     // MARK: - Derived chart data
@@ -169,7 +181,16 @@ final class OverviewViewModel: ObservableObject {
     // MARK: - Scanning
 
     func scanIfNeeded() {
-        guard !hasScanned, !isScanning else { return }
+        guard !isScanning else { return }
+
+        // A cached result is shown instantly. Only rescan when it is old
+        // enough that the user may have changed the library.
+        if hasScanned,
+           let lastScanDate,
+           ScanCache.isFresh(lastScanDate, maxAge: ScanCache.overviewMaxAge) {
+            return
+        }
+
         scan()
     }
 
@@ -227,6 +248,8 @@ final class OverviewViewModel: ObservableObject {
             self.hasScanned = true
             self.isScanning = false
             self.scanTask = nil
+            self.lastScanDate = Date()
+            ScanCache.saveOverview(result, for: kind, at: self.lastScanDate ?? Date())
         }
     }
 

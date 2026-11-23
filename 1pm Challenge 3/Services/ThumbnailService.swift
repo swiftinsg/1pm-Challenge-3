@@ -176,8 +176,8 @@ enum ThumbnailLoader {
         await withCheckedContinuation { continuation in
             let gate = ThumbnailGate(continuation)
             let options = PHImageRequestOptions()
-            // iCloud-only photos should still show their picture.
-            options.isNetworkAccessAllowed = true
+            // Never download an iCloud original just to draw a row.
+            options.isNetworkAccessAllowed = false
             options.version = .current
             // High-quality delivery with fast resizing matches the request
             // that produced reliable row previews before the overview rework.
@@ -198,7 +198,7 @@ enum ThumbnailLoader {
     private static func imageThumbnailFromData(for asset: PHAsset) async -> UIImage? {
         let data: Data? = await withCheckedContinuation { continuation in
             let options = PHImageRequestOptions()
-            options.isNetworkAccessAllowed = true
+            options.isNetworkAccessAllowed = false
             options.version = .current
             options.deliveryMode = .highQualityFormat
             options.resizeMode = .none
@@ -218,7 +218,7 @@ enum ThumbnailLoader {
     private static func videoPosterFrame(for asset: PHAsset) async -> UIImage? {
         let avAsset: AVAsset? = await withCheckedContinuation { continuation in
             let options = PHVideoRequestOptions()
-            options.isNetworkAccessAllowed = true
+            options.isNetworkAccessAllowed = false
             options.deliveryMode = .automatic
 
             PHImageManager.default().requestAVAsset(

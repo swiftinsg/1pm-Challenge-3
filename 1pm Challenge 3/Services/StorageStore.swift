@@ -16,6 +16,16 @@ final class StorageStore: ObservableObject {
     private var lastRefresh: Date?
     private var lastAuthorizationStatus: PHAuthorizationStatus?
 
+    init() {
+        // Restore the last snapshot immediately so the landing page and Home
+        // never wait for a full measurement just to show known values.
+        if let cached = ScanCache.loadSnapshot() {
+            snapshot = cached.snapshot
+            lastRefresh = cached.updatedAt
+            lastAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        }
+    }
+
     @MainActor
     func refresh(requestAccess: Bool = true) async {
         guard !isRefreshing else { return }
@@ -31,6 +41,12 @@ final class StorageStore: ObservableObject {
         } else {
             authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         }
+
+        // Access changed, so any cached photo/video list is no longer valid.
+        if let lastAuthorizationStatus, lastAuthorizationStatus != authorization {
+            ScanCache.invalidateOverview(for: .photos)
+            ScanCache.invalidateOverview(for: .videos)
+        }
         lastAuthorizationStatus = authorization
 
         let photos: CategoryUsage
@@ -38,20 +54,22 @@ final class StorageStore: ObservableObject {
 
         switch authorization {
         case .authorized, .limited:
-            let media = await Self.measureMediaLibrary()
+            // Only locally stored media is counted. The measurement never
+            // requests an iCloud original, so it cannot trigger a download.
+            let media = await OverviewScanner.measureLocalMedia()
             let isLimited = authorization == .limited
 
             photos = CategoryUsage(
                 category: .photos,
-                bytes: media.photos.bytes,
-                quality: Self.quality(complete: media.photos.complete, isLimited: isLimited),
-                note: Self.mediaNote(complete: media.photos.complete, isLimited: isLimited)
+                bytes: media.photos,
+                quality: Self.quality(complete: media.photosComplete, isLimited: isLimited),
+                note: Self.mediaNote(complete: media.photosComplete, isLimited: isLimited)
             )
             videos = CategoryUsage(
                 category: .videos,
-                bytes: media.videos.bytes,
-                quality: Self.quality(complete: media.videos.complete, isLimited: isLimited),
-                note: Self.mediaNote(complete: media.videos.complete, isLimited: isLimited)
+                bytes: media.videos,
+                quality: Self.quality(complete: media.videosComplete, isLimited: isLimited),
+                note: Self.mediaNote(complete: media.videosComplete, isLimited: isLimited)
             )
 
         case .denied, .restricted:
@@ -74,17 +92,20 @@ final class StorageStore: ObservableObject {
             category: .files,
             bytes: fileBytes,
             quality: .verified,
-            note: "Measured from files in On My iPhone › 1pm Challenge 3."
+            note: Self.filesNote
         )
 
-        snapshot = StorageSnapshot(
+        let snapshot = StorageSnapshot(
             totalCapacity: capacity.total,
             usedCapacity: capacity.used,
             categories: [photos, videos, files],
             isLoaded: true,
             isPhotoAccessLimited: authorization == .limited
         )
+
+        self.snapshot = snapshot
         lastRefresh = Date()
+        ScanCache.saveSnapshot(snapshot, at: lastRefresh ?? Date())
     }
 
     /// Refreshes when access changed, on first launch, or after the values
@@ -93,7 +114,21 @@ final class StorageStore: ObservableObject {
     @MainActor
     func refreshIfNeeded() async {
         let currentAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        let isStale = lastRefresh.map { Date().timeIntervalSince($0) > 300 } ?? true
+        let isStale = lastRefresh.map { Date().timeIntervalSince($0) > 900 } ?? true
+
+        // Access can change while the app is closed. Drop cached category
+        // lists when the snapshot no longer matches the current permission.
+        if snapshot.isLoaded {
+            let wasAvailable = snapshot.usage(for: .photos).quality != .unavailable
+            let isAvailable = currentAuthorization == .authorized || currentAuthorization == .limited
+            let wasLimited = snapshot.isPhotoAccessLimited
+            let isLimited = currentAuthorization == .limited
+
+            if wasAvailable != isAvailable || wasLimited != isLimited {
+                ScanCache.invalidateOverview(for: .photos)
+                ScanCache.invalidateOverview(for: .videos)
+            }
+        }
 
         guard !snapshot.isLoaded || currentAuthorization != lastAuthorizationStatus || isStale else {
             return
@@ -128,56 +163,12 @@ final class StorageStore: ObservableObject {
         }
     }
 
-    private static func measureMediaLibrary() async -> MediaMeasurement {
-        await Task.detached(priority: .userInitiated) {
-            let options = PHFetchOptions()
-            options.includeHiddenAssets = false
-            options.includeAllBurstAssets = false
-
-            let photoAssets = PHAsset.fetchAssets(with: .image, options: options)
-            let videoAssets = PHAsset.fetchAssets(with: .video, options: options)
-
-            // Walk the photo and video libraries at the same time. Measuring
-            // them one after another doubled the wait on the landing page.
-            return await withTaskGroup(of: (Bool, MediaBucket).self) { group in
-                group.addTask { (true, measure(assets: photoAssets)) }
-                group.addTask { (false, measure(assets: videoAssets)) }
-
-                var photos = MediaBucket(bytes: 0, complete: true)
-                var videos = MediaBucket(bytes: 0, complete: true)
-
-                for await (isPhoto, bucket) in group {
-                    if isPhoto {
-                        photos = bucket
-                    } else {
-                        videos = bucket
-                    }
-                }
-
-                return MediaMeasurement(photos: photos, videos: videos)
-            }
-        }.value
-    }
-
-    private static func measure(assets: PHFetchResult<PHAsset>) -> MediaBucket {
-        var bytes: Int64 = 0
-        var complete = true
-
-        assets.enumerateObjects { asset, _, _ in
-            autoreleasepool {
-                // Counts the primary file, Live Photo motion, edit data and an
-                // alternate RAW representation together, exactly like the
-                // category pages do.
-                guard let measurement = AssetSizeMeasurement.measure(asset) else {
-                    complete = false
-                    return
-                }
-
-                bytes += measurement.bytes
-            }
+    private static var filesNote: String {
+        let folders = DocumentLibrary.shared.folders
+        if folders.isEmpty {
+            return "Measured from files in On My iPhone › 1pm Challenge 3."
         }
-
-        return MediaBucket(bytes: bytes, complete: complete)
+        return "Measured from On My iPhone and \(folders.count) allowed folder\(folders.count == 1 ? "" : "s")."
     }
 
     private static func quality(complete: Bool, isLimited: Bool) -> MeasurementQuality {
@@ -189,7 +180,7 @@ final class StorageStore: ObservableObject {
             return "Limited photo access. Only the items you allowed are measured, so this total may be incomplete."
         }
         if !complete {
-            return "Some items could not be read from iCloud, so this total may be lower than the value in Settings."
+            return "Some items could not be measured, so this total may be lower than the value in Settings."
         }
         return nil
     }
@@ -233,60 +224,64 @@ final class StorageStore: ObservableObject {
     }
 
     private static func appFileBytes() async -> Int64 {
-        await Task.detached(priority: .utility) {
-            measuredDocumentBytes()
+        let roots = DocumentLibrary.shared.scanRoots
+        return await Task.detached(priority: .utility) {
+            measuredFileBytes(in: roots)
         }.value
     }
 
     /// Kept synchronous so the directory enumerator is never traversed from
     /// an async context. The caller runs it on a background task.
-    private static func measuredDocumentBytes() -> Int64 {
+    private static func measuredFileBytes(in roots: [URL]) -> Int64 {
         let fileManager = FileManager.default
-        guard let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return 0
-        }
 
         let keys: Set<URLResourceKey> = [
             .isRegularFileKey,
             .totalFileAllocatedSizeKey,
             .fileAllocatedSizeKey,
-            .fileSizeKey
+            .fileSizeKey,
+            .isUbiquitousItemKey,
+            .ubiquitousItemDownloadingStatusKey
         ]
 
-        guard let enumerator = fileManager.enumerator(
-            at: documents,
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles, .skipsPackageDescendants],
-            errorHandler: { _, _ in true }
-        ) else {
-            return 0
-        }
-
         var total: Int64 = 0
-        for case let url as URL in enumerator {
-            guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isRegularFile == true else {
+        var seenPaths = Set<String>()
+
+        for root in roots {
+            guard let enumerator = fileManager.enumerator(
+                at: root,
+                includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else {
                 continue
             }
 
-            let size = values.totalFileAllocatedSize
-                ?? values.fileAllocatedSize
-                ?? values.fileSize
-                ?? 0
-            total += Int64(size)
+            for case let url as URL in enumerator {
+                let path = url.standardizedFileURL.path
+                guard seenPaths.insert(path).inserted else { continue }
+
+                guard let values = try? url.resourceValues(forKeys: keys),
+                      values.isRegularFile == true else {
+                    continue
+                }
+
+                let isCloudPlaceholder = values.isUbiquitousItem == true
+                    && values.ubiquitousItemDownloadingStatus != .current
+
+                let size: Int
+                if isCloudPlaceholder {
+                    size = values.fileSize ?? 0
+                } else {
+                    size = values.totalFileAllocatedSize
+                        ?? values.fileAllocatedSize
+                        ?? values.fileSize
+                        ?? 0
+                }
+                total += Int64(size)
+            }
         }
+
         return total
     }
-}
-
-// MARK: - Private measurement types
-
-private struct MediaBucket: Sendable {
-    var bytes: Int64
-    var complete: Bool
-}
-
-private struct MediaMeasurement: Sendable {
-    var photos: MediaBucket
-    var videos: MediaBucket
 }

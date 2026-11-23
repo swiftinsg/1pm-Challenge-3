@@ -8,7 +8,7 @@ import SwiftUI
 /// Every breakdown a category page can show. An item can belong to more than
 /// one category (for example an old large video), so membership is derived
 /// from per-item flags instead of a single priority assignment.
-enum OverviewCategory: String, CaseIterable, Identifiable, Hashable {
+enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
     case largePhotos
     case outdatedPhotos
     case blurryPhotos
@@ -295,7 +295,7 @@ enum OutdatedThreshold: Int, CaseIterable, Identifiable {
 
 /// One media item or file inside an overview category. Only descriptors are
 /// kept in memory; image data is fetched lazily by the detail page.
-struct OverviewItem: Identifiable, Hashable {
+struct OverviewItem: Identifiable, Hashable, Codable {
     let id: String
     let name: String
     let bytes: Int64
@@ -329,7 +329,7 @@ struct OverviewUsage: Identifiable, Hashable {
     }
 }
 
-enum PhotoAccessState: Equatable {
+enum PhotoAccessState: Equatable, Codable {
     case notApplicable
     case notDetermined
     case denied

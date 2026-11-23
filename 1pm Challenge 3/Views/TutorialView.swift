@@ -329,7 +329,7 @@ private struct TutorialPage: Identifiable {
             id: 4,
             art: .files,
             title: "Measure your files",
-            message: "On the Files page, tap Add files from On My iPhone to include documents in your scan. They're measured alongside your media."
+            message: "On the Files page, tap Choose folders on On My iPhone to include documents in your scan. Files are measured where they are and never copied."
         )
     ]
 }

@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-enum StorageCategory: String, CaseIterable, Identifiable, Hashable {
+enum StorageCategory: String, CaseIterable, Identifiable, Hashable, Codable {
     case photos
     case videos
     case files
@@ -46,13 +46,13 @@ enum StorageCategory: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
-enum MeasurementQuality: String, Equatable {
+enum MeasurementQuality: String, Equatable, Codable {
     case verified
     case estimated
     case unavailable
 }
 
-struct CategoryUsage: Identifiable, Equatable {
+struct CategoryUsage: Identifiable, Equatable, Codable {
     let category: StorageCategory
     var bytes: Int64
     var quality: MeasurementQuality
@@ -79,7 +79,7 @@ struct CategoryUsage: Identifiable, Equatable {
     }
 }
 
-struct StorageSnapshot: Equatable {
+struct StorageSnapshot: Equatable, Codable {
     var totalCapacity: Int64?
     var usedCapacity: Int64?
     var categories: [CategoryUsage]

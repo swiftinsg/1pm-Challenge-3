@@ -83,7 +83,8 @@ private enum AssetPhotoExporter {
         }
 
         let options = PHImageRequestOptions()
-        options.isNetworkAccessAllowed = true
+        // Previewing must not pull an iCloud original onto the device.
+        options.isNetworkAccessAllowed = false
         options.version = .current
         options.deliveryMode = .highQualityFormat
         options.resizeMode = .none
@@ -400,7 +401,8 @@ private struct LibraryVideoPreviewView: View {
         }
 
         let options = PHVideoRequestOptions()
-        options.isNetworkAccessAllowed = true
+        // Play only the copy already on this iPhone.
+        options.isNetworkAccessAllowed = false
         options.deliveryMode = .automatic
 
         do {

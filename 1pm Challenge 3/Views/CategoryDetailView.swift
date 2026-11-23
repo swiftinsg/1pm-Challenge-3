@@ -128,7 +128,7 @@ struct CategoryDetailView: View {
         switch usage.quality {
         case .verified:
             if usage.category == .files {
-                return "Measured from files in On My iPhone › 1pm Challenge 3."
+                return "Measured from files in On My iPhone and the folders you allowed."
             }
             return "Measured from the \(usage.category.title.lowercased()) on this iPhone."
         case .estimated:
@@ -140,7 +140,7 @@ struct CategoryDetailView: View {
 
     private var footerText: String {
         if usage.category == .files {
-            return "Files stay in On My iPhone › 1pm Challenge 3."
+            return "Files are scanned where they are. Nothing is copied."
         }
         return "Detailed \(usage.category.title.lowercased()) tools are coming soon."
     }
@@ -172,7 +172,7 @@ struct CategoryDetailView: View {
             HStack(spacing: 6) {
                 Image(systemName: "folder.badge.plus")
                     .font(.system(size: 13, weight: .semibold))
-                Text("Add files from On My iPhone")
+                Text("Choose folders on On My iPhone")
             }
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(Color(uiColor: .systemBackground))
