@@ -19,12 +19,12 @@ struct StorageCapacityBar: View {
 
     private var availableText: String {
         guard let used, let total else { return "—" }
-        return StorageFormatter.headline(max(0, total - used))
+        return StorageFormatter.capacity(max(0, total - used))
     }
 
     private var usedText: String {
         guard let used else { return "—" }
-        return StorageFormatter.headline(used) + " used"
+        return StorageFormatter.capacity(used) + " used"
     }
 
     var body: some View {

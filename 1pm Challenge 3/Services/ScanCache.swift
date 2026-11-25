@@ -33,19 +33,45 @@ enum ScanCache {
         qos: .utility
     )
 
+    // Decoding a large category list can take long enough to block a page
+    // transition. Once a file has been read it stays here, so opening a page
+    // is an in-memory lookup instead of another disk decode.
+    private static let memoryLock = NSLock()
+    private static var memorySnapshot: SnapshotEntry?
+    private static var memoryOverviews: [StorageCategory: OverviewEntry] = [:]
+
     // MARK: - Home snapshot
 
     static func loadSnapshot() -> SnapshotEntry? {
+        memoryLock.lock()
+        let cached = memorySnapshot
+        memoryLock.unlock()
+        if let cached { return cached }
+
         guard let url = fileURL(name: "snapshot.json"),
-              let data = try? Data(contentsOf: url) else {
+              let data = try? Data(contentsOf: url),
+              let entry = try? decoder.decode(SnapshotEntry.self, from: data) else {
             return nil
         }
 
-        return try? decoder.decode(SnapshotEntry.self, from: data)
+        memoryLock.lock()
+        // A scan may have finished while this file was being decoded. Never
+        // let the older on-disk copy replace the newer in-memory result.
+        if memorySnapshot == nil {
+            memorySnapshot = entry
+        }
+        let result = memorySnapshot ?? entry
+        memoryLock.unlock()
+        return result
     }
 
     static func saveSnapshot(_ snapshot: StorageSnapshot, at date: Date = Date()) {
         let entry = SnapshotEntry(snapshot: snapshot, updatedAt: date)
+
+        memoryLock.lock()
+        memorySnapshot = entry
+        memoryLock.unlock()
+
         // The Home snapshot is tiny, so write it immediately. A force-quit
         // right after a scan must not lose the values the user just waited for.
         writeNow(entry, name: "snapshot.json")
@@ -58,12 +84,25 @@ enum ScanCache {
     // MARK: - Category scan
 
     static func loadOverview(for kind: StorageCategory) -> OverviewEntry? {
+        memoryLock.lock()
+        let cached = memoryOverviews[kind]
+        memoryLock.unlock()
+        if let cached { return cached }
+
         guard let url = fileURL(name: "overview-\(kind.rawValue).json"),
-              let data = try? Data(contentsOf: url) else {
+              let data = try? Data(contentsOf: url),
+              let entry = try? decoder.decode(OverviewEntry.self, from: data) else {
             return nil
         }
 
-        return try? decoder.decode(OverviewEntry.self, from: data)
+        memoryLock.lock()
+        // Keep a result saved while the file was being decoded.
+        if memoryOverviews[kind] == nil {
+            memoryOverviews[kind] = entry
+        }
+        let result = memoryOverviews[kind] ?? entry
+        memoryLock.unlock()
+        return result
     }
 
     static func saveOverview(
@@ -77,7 +116,25 @@ enum ScanCache {
             skippedItems: result.skippedItems,
             updatedAt: date
         )
+
+        memoryLock.lock()
+        memoryOverviews[kind] = entry
+        memoryLock.unlock()
+
         writeAsync(entry, name: "overview-\(kind.rawValue).json")
+    }
+
+    /// Reads every cached page once, off the main thread. The landing page is
+    /// on screen for at least a moment on every launch, which is the ideal
+    /// time to have all category data ready in memory.
+    static func preload() {
+        // Use a separate queue so a large read never delays a cache write.
+        DispatchQueue.global(qos: .utility).async {
+            _ = loadSnapshot()
+            for kind in StorageCategory.allCases {
+                _ = loadOverview(for: kind)
+            }
+        }
     }
 
     static func isFresh(_ date: Date, maxAge: TimeInterval) -> Bool {
@@ -87,6 +144,10 @@ enum ScanCache {
     /// Drops a category result so the next visit scans again. Used when the
     /// user grants a folder or changes photo access.
     static func invalidateOverview(for kind: StorageCategory) {
+        memoryLock.lock()
+        memoryOverviews[kind] = nil
+        memoryLock.unlock()
+
         guard let url = fileURL(name: "overview-\(kind.rawValue).json") else {
             return
         }

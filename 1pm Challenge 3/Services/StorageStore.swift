@@ -32,8 +32,10 @@ final class StorageStore: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
 
-        let capacity = Self.deviceCapacity()
-        let fileBytes = await Self.appFileBytes()
+        // Capacity is instant; the file walk and the photo library measurement
+        // run at the same time instead of one after the other.
+        let capacity = DeviceStorage.current()
+        async let fileBytesTask = Self.appFileBytes()
 
         let authorization: PHAuthorizationStatus
         if requestAccess {
@@ -88,6 +90,7 @@ final class StorageStore: ObservableObject {
             videos = CategoryUsage(category: .videos, bytes: 0, quality: .unavailable, note: note)
         }
 
+        let fileBytes = await fileBytesTask
         let files = CategoryUsage(
             category: .files,
             bytes: fileBytes,
@@ -95,9 +98,14 @@ final class StorageStore: ObservableObject {
             note: Self.filesNote
         )
 
+        // The scan can run for a while on a large library, so read the volume
+        // once more before publishing. The big Home numbers are then current
+        // at the moment the page appears, not at the moment the scan started.
+        let finalCapacity = DeviceStorage.current()
+
         let snapshot = StorageSnapshot(
-            totalCapacity: capacity.total,
-            usedCapacity: capacity.used,
+            totalCapacity: finalCapacity.total ?? capacity.total,
+            usedCapacity: finalCapacity.used ?? capacity.used,
             categories: [photos, videos, files],
             isLoaded: true,
             isPhotoAccessLimited: authorization == .limited
@@ -108,11 +116,40 @@ final class StorageStore: ObservableObject {
         ScanCache.saveSnapshot(snapshot, at: lastRefresh ?? Date())
     }
 
+    /// Re-reads only the device capacity. This is cheap (a few volume
+    /// resource values) and keeps the large Home numbers accurate whenever the
+    /// page appears or the app returns to the foreground, without rescanning
+    /// the whole photo library.
+    @MainActor
+    func refreshCapacity() {
+        let capacity = DeviceStorage.current()
+        guard let total = capacity.total else { return }
+
+        var updated = snapshot
+        updated.totalCapacity = total
+        // If the volume briefly fails to report free space, keep the last
+        // usable value instead of replacing a real number with a dash.
+        updated.usedCapacity = capacity.used ?? updated.usedCapacity
+
+        guard updated != snapshot else { return }
+        snapshot = updated
+
+        // Keep the cached copy in step, but never replace a real completed
+        // scan with the empty placeholder on first launch.
+        if updated.isLoaded {
+            ScanCache.saveSnapshot(updated, at: lastRefresh ?? Date())
+        }
+    }
+
     /// Refreshes when access changed, on first launch, or after the values
     /// have gone stale. Returning from the app switcher does not trigger a
     /// needless full rescan.
     @MainActor
     func refreshIfNeeded() async {
+        // Capacity changes constantly as apps use and free space. Refresh it
+        // even when the category scan is still fresh.
+        refreshCapacity()
+
         let currentAuthorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         let isStale = lastRefresh.map { Date().timeIntervalSince($0) > 900 } ?? true
 
@@ -186,42 +223,6 @@ final class StorageStore: ObservableObject {
     }
 
     // MARK: - Device and app files
-
-    private static func deviceCapacity() -> (total: Int64?, used: Int64?) {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        let keys: Set<URLResourceKey> = [
-            .volumeTotalCapacityKey,
-            .volumeAvailableCapacityForImportantUsageKey,
-            .volumeAvailableCapacityKey
-        ]
-
-        if let values = try? home.resourceValues(forKeys: keys),
-           let total = values.volumeTotalCapacity {
-            // Prefer the capacity iOS reports for important usage: it includes
-            // purgeable space, which is the figure Settings counts as free.
-            // The plain available value is still used when that key is missing
-            // or reports zero.
-            let importantUsage = values.volumeAvailableCapacityForImportantUsage ?? 0
-            let plainAvailable = Int64(values.volumeAvailableCapacity ?? 0)
-
-            let available: Int64? = importantUsage > 0
-                ? importantUsage
-                : (plainAvailable > 0 ? plainAvailable : nil)
-
-            return (
-                Int64(total),
-                available.map { max(0, Int64(total) - $0) }
-            )
-        }
-
-        if let attributes = try? FileManager.default.attributesOfFileSystem(forPath: NSHomeDirectory()),
-           let total = (attributes[.systemSize] as? NSNumber)?.int64Value {
-            let free = (attributes[.systemFreeSize] as? NSNumber)?.int64Value
-            return (total, free.map { max(0, total - $0) })
-        }
-
-        return (nil, nil)
-    }
 
     private static func appFileBytes() async -> Int64 {
         let roots = DocumentLibrary.shared.scanRoots

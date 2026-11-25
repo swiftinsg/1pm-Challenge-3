@@ -258,6 +258,8 @@ struct DonutChartView: View {
                 .tracking(-1.4)
                 .monospacedDigit()
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
 
             Text(capacityText)
                 .font(.system(size: 12.5, weight: .medium))
@@ -277,7 +279,7 @@ struct DonutChartView: View {
     private var usedText: String {
         guard snapshot.isLoaded, let used = snapshot.usedCapacity else { return "—" }
         guard let total = snapshot.totalCapacity else {
-            return StorageFormatter.headline(used)
+            return StorageFormatter.capacity(used)
         }
         return StorageFormatter.usedHeadline(used, total: total)
     }
@@ -286,9 +288,9 @@ struct DonutChartView: View {
         guard snapshot.isLoaded else { return "Measuring storage…" }
         guard let total = snapshot.totalCapacity else { return "Storage unavailable" }
         guard snapshot.usedCapacity != nil else {
-            return "\(StorageFormatter.headline(total)) capacity"
+            return "\(StorageFormatter.capacity(total)) capacity"
         }
-        return "of \(StorageFormatter.headline(total)) used"
+        return "of \(StorageFormatter.capacity(total)) used"
     }
 
     private var statusText: String {

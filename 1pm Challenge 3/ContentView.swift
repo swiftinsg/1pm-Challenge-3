@@ -14,20 +14,15 @@ struct ContentView: View {
     @ObservedObject private var coach = CoachController.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var path = NavigationPath()
-    @State private var hasFinishedScan: Bool
+    /// The landing page with the SCAN button is always the first screen of a
+    /// new app launch, even when a previous scan is cached. The cached values
+    /// are still restored by `StorageStore`, so the scan itself stays fast.
+    @State private var hasFinishedScan = false
     @AppStorage("hasCompletedCoachTour") private var hasCompletedCoachTour = false
     @State private var isChoosingFolder = false
     @State private var showSettings = false
     @State private var folderError: String?
-    @State private var didAutoScan = false
-    @State private var autoScanToken = 0
     @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-
-    init() {
-        // Restore the last completed scan so a returning user lands on Home
-        // immediately instead of watching the same scan again.
-        _hasFinishedScan = State(initialValue: ScanCache.hasSnapshot())
-    }
 
     private var photosGranted: Bool {
         photoStatus == .authorized || photoStatus == .limited
@@ -41,7 +36,6 @@ struct ContentView: View {
                         .transition(.opacity)
                 } else {
                     ScanLandingView(
-                        autoScanToken: autoScanToken,
                         photosGranted: photosGranted,
                         filesGranted: library.hasFolderAccess,
                         onAllowPhotos: requestPhotoAccessForScan,
@@ -108,8 +102,10 @@ struct ContentView: View {
             // Activity was on screen; clear it instead of leaving it stale.
             DeletionActivityController.shared.endStaleActivities()
 
-            // Cached values are already on screen. Refresh quietly if they
-            // have gone stale.
+            // Warm the in-memory cache while the landing page is on screen.
+            // Category pages then open without waiting on a disk decode.
+            ScanCache.preload()
+
             if hasFinishedScan {
                 await store.refreshIfNeeded()
             }
@@ -118,6 +114,9 @@ struct ContentView: View {
             guard phase == .active else { return }
 
             photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            // The big Home numbers must match the current device capacity as
+            // soon as the app comes back.
+            store.refreshCapacity()
             advancePermissionStepIfReady()
 
             guard hasFinishedScan else { return }
@@ -152,6 +151,9 @@ struct ContentView: View {
             onRequestPhotoAccess: handlePhotoAccessRequest,
             onOpenSettings: { showSettings = true }
         )
+        // Coming back from a category page should not show yesterday's
+        // capacity. This only re-reads the volume values; it does not rescan.
+        .onAppear { store.refreshCapacity() }
     }
 
     @ViewBuilder
@@ -185,11 +187,9 @@ struct ContentView: View {
 
     private func handleAppear() {
         photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        store.refreshCapacity()
 
-        guard !hasCompletedCoachTour else {
-            startAutoScanIfPossible()
-            return
-        }
+        guard !hasCompletedCoachTour else { return }
 
         // First launch goes straight to the landing page with the interactive
         // walkthrough layered on top. There is no separate tutorial screen.
@@ -200,20 +200,6 @@ struct ContentView: View {
         }
 
         advancePermissionStepIfReady()
-    }
-
-    /// Starts a scan automatically only after the tour is done and a folder is
-    /// already allowed. During the tour the user taps SCAN themselves.
-    private func startAutoScanIfPossible() {
-        guard !hasFinishedScan,
-              !didAutoScan,
-              library.hasFolderAccess,
-              !coach.isRunning else {
-            return
-        }
-
-        didAutoScan = true
-        autoScanToken += 1
     }
 
     private func handleFolderSelection(_ result: Result<[URL], Error>) {
@@ -233,8 +219,6 @@ struct ContentView: View {
 
                 if hasFinishedScan {
                     Task { await store.refresh() }
-                } else {
-                    startAutoScanIfPossible()
                 }
             } catch {
                 folderError = error.localizedDescription

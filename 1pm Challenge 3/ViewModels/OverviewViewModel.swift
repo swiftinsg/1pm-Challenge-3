@@ -162,20 +162,40 @@ final class OverviewViewModel: ObservableObject {
 
     /// Category membership is derived from the item flags, so a photo can
     /// appear as a screenshot and as outdated at the same time.
+    ///
+    /// One pass over the scan result fills every category. The previous
+    /// implementation filtered the whole library once per category, which made
+    /// opening a large page do several full scans on the main thread.
     private func rebuildUsages() {
         let cutoff = outdatedThreshold.cutoff
+        let categories = allCategories
 
-        usages = allCategories.map { category in
-            let matching = scannedItems.filter {
-                category.matches($0, cutoff: cutoff)
+        var itemsByCategory: [OverviewCategory: [OverviewItem]] = [:]
+        itemsByCategory.reserveCapacity(categories.count)
+
+        for category in categories {
+            itemsByCategory[category] = []
+        }
+
+        var total: Int64 = 0
+
+        for item in scannedItems {
+            total += item.bytes
+
+            for category in categories where category.matches(item, cutoff: cutoff) {
+                itemsByCategory[category, default: []].append(item)
             }
+        }
+
+        usages = categories.map { category in
+            let matching = itemsByCategory[category] ?? []
             return OverviewUsage(
                 category: category,
                 bytes: matching.reduce(Int64(0)) { $0 + $1.bytes },
                 items: matching
             )
         }
-        totalBytes = allItemsBytes
+        totalBytes = total
     }
 
     // MARK: - Scanning

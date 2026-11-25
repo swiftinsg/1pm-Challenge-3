@@ -19,6 +19,13 @@ import Vision
 enum OverviewScanner {
     typealias ProgressHandler = @Sendable (Double) async -> Void
 
+    /// PhotoKit and file metadata reads spend most of their time waiting, so a
+    /// few more workers than CPU cores finishes large libraries noticeably
+    /// sooner without starving the UI.
+    private static var mediaWorkerCount: Int {
+        max(4, min(8, ProcessInfo.processInfo.activeProcessorCount * 2))
+    }
+
     static func scan(
         kind: StorageCategory,
         progress: @escaping ProgressHandler
@@ -96,7 +103,7 @@ enum OverviewScanner {
         var skippedItems = 0
         var completed = 0
 
-        let workerCount = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount))
+        let workerCount = Self.mediaWorkerCount
 
         await withTaskGroup(of: (Int, PhotoScanEntry?).self) { group in
             var nextIndex = 0
@@ -326,7 +333,7 @@ enum OverviewScanner {
         var skippedItems = 0
         var completed = 0
 
-        let workerCount = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount))
+        let workerCount = Self.mediaWorkerCount
 
         await withTaskGroup(of: (Int, VideoScanEntry?).self) { group in
             var nextIndex = 0
@@ -501,7 +508,7 @@ enum OverviewScanner {
         fetch.enumerateObjects { asset, _, _ in assets.append(asset) }
 
         return await withTaskGroup(of: (Int64?, Bool).self) { group in
-            let workerCount = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount))
+            let workerCount = Self.mediaWorkerCount
             var nextIndex = 0
             var bucket = MediaBucket()
 
@@ -549,7 +556,7 @@ enum OverviewScanner {
         fetch.enumerateObjects { asset, _, _ in assets.append(asset) }
 
         return await withTaskGroup(of: (Int64?, Bool).self) { group in
-            let workerCount = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount))
+            let workerCount = Self.mediaWorkerCount
             var nextIndex = 0
             var bucket = MediaBucket()
 
@@ -653,7 +660,7 @@ enum OverviewScanner {
         let total = entries.count
         var scanned = [ScannedFile?](repeating: nil, count: total)
         var completed = 0
-        let workerCount = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount))
+        let workerCount = Self.mediaWorkerCount
 
         await withTaskGroup(of: (Int, ScannedFile).self) { group in
             var nextIndex = 0

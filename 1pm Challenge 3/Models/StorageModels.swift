@@ -195,6 +195,22 @@ enum StorageFormatter {
         return formatted(component.value, unit: component.unit)
     }
 
+    /// Device capacity and used space are shown with one decimal so they line
+    /// up with the figures in Settings › General › iPhone Storage. Whole
+    /// values stay clean ("128 GB") instead of becoming "128.0 GB".
+    static func capacity(_ bytes: Int64) -> String {
+        guard bytes > 0 else { return "0 MB" }
+
+        let component = components(for: bytes)
+        let rounded = (component.value * 10).rounded() / 10
+
+        if rounded == rounded.rounded() {
+            return "\(Int(rounded)) \(component.unit)"
+        }
+
+        return "\(oneDecimal(rounded)) \(component.unit)"
+    }
+
     /// Sub-megabyte values are common in filtered overview categories, where
     /// "0 MB" would hide a real 30 KB item. This keeps small values readable
     /// without changing the Home page's headline formatting.
@@ -213,8 +229,8 @@ enum StorageFormatter {
     /// (for example "245 GB of 245 GB"), show one truncated decimal for the
     /// used value so the two numbers never read as identical.
     static func usedHeadline(_ used: Int64, total: Int64) -> String {
-        let standard = headline(used)
-        guard standard == headline(total) else { return standard }
+        let standard = capacity(used)
+        guard standard == capacity(total) else { return standard }
 
         let component = components(for: used)
         let truncated = (component.value * 10).rounded(.down) / 10

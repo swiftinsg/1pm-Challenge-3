@@ -32,6 +32,7 @@ struct SettingsSheet: View {
 
                 ScrollView {
                     VStack(spacing: 20) {
+                        storageSection
                         scanSection
                         walkthroughSection
                         foldersSection
@@ -75,11 +76,48 @@ struct SettingsSheet: View {
         }
         .onAppear {
             photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            store.refreshCapacity()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+            store.refreshCapacity()
         }
+    }
+
+    // MARK: - Storage
+
+    /// The same values Home uses for its big numbers. Both pages read the
+    /// single `StorageStore` snapshot, so they can never disagree.
+    private var storageSection: some View {
+        SettingsCard(title: "Storage") {
+            SettingsValueRow(
+                symbol: "internaldrive.fill",
+                title: "Used",
+                value: formattedCapacity(store.snapshot.usedCapacity)
+            )
+
+            separator
+
+            SettingsValueRow(
+                symbol: "internaldrive",
+                title: "Capacity",
+                value: formattedCapacity(store.snapshot.totalCapacity)
+            )
+
+            separator
+
+            SettingsValueRow(
+                symbol: "checkmark.circle",
+                title: "Available",
+                value: formattedCapacity(store.snapshot.availableCapacity)
+            )
+        }
+    }
+
+    private func formattedCapacity(_ bytes: Int64?) -> String {
+        guard let bytes else { return "—" }
+        return StorageFormatter.capacity(bytes)
     }
 
     // MARK: - Scan
@@ -383,6 +421,39 @@ private struct SettingsCard<Content: View>: View {
                     .strokeBorder(AppTheme.hairline, lineWidth: 1)
             )
         }
+    }
+}
+
+private struct SettingsValueRow: View {
+    let symbol: String
+    let title: String
+    let value: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(AppTheme.secondaryText)
+                .frame(width: 30, height: 30)
+                .background(
+                    Circle().fill(AppTheme.surface)
+                )
+
+            Text(title)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.primary)
+
+            Spacer(minLength: 8)
+
+            Text(value)
+                .font(.system(size: 15, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title), \(value)")
     }
 }
 
