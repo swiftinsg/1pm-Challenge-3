@@ -13,7 +13,7 @@ struct OverviewCategoryDetailView: View {
     let kind: StorageCategory
     let usage: OverviewUsage
     /// Optional overrides so this page can also present a combined filter
-    /// selection (for example "Large and Blurry Photos") instead of a single
+    /// selection (for example "Large and Duplicate Photos") instead of a single
     /// category.
     var displayTitle: String? = nil
     var displayColor: Color? = nil

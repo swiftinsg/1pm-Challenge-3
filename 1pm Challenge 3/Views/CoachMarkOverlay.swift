@@ -33,7 +33,7 @@ struct CoachArcSpotlight: Equatable {
     var startDegrees: Double
     var endDegrees: Double
 
-    func path(padding: CGFloat = 7) -> Path {
+    func path(padding: CGFloat = 4) -> Path {
         let outer = radius + thickness / 2 + padding
         let inner = max(1, radius - thickness / 2 - padding)
         let start = Angle.degrees(startDegrees - 0.45)
@@ -69,7 +69,7 @@ enum CoachSpotlight {
         case .rect(let rect):
             return rect
         case .arc(let arc):
-            let outer = arc.radius + arc.thickness / 2 + 7
+            let outer = arc.radius + arc.thickness / 2 + 4
             return CGRect(
                 x: arc.center.x - outer,
                 y: arc.center.y - outer,
@@ -214,7 +214,7 @@ private struct CoachOverlay: View {
             if let arc = arcs[anchor] {
                 result.append(.arc(arc))
             } else if let frame = anchors[anchor], frame.width > 1, frame.height > 1 {
-                result.append(.rect(frame.insetBy(dx: -8, dy: -8)))
+                result.append(.rect(frame.insetBy(dx: -4, dy: -4)))
             } else if let fallback = fallbackFrame(for: anchor, in: size) {
                 result.append(.rect(fallback))
             }
@@ -242,9 +242,9 @@ private struct CoachOverlay: View {
         switch anchor {
         case .filterButton, .detailSelectButton:
             let top = windowSafeAreaTop
-            return CGRect(x: size.width - 86, y: top - 4, width: 82, height: 50)
+            return CGRect(x: size.width - 60, y: top, width: 44, height: 44)
         case .filterCancelButton:
-            return CGRect(x: 0, y: 0, width: 118, height: 54)
+            return CGRect(x: 12, y: 0, width: 64, height: 44)
         default:
             return nil
         }
@@ -263,7 +263,7 @@ private struct CoachOverlay: View {
     private func outline(for spotlight: CoachSpotlight) -> some View {
         switch spotlight {
         case .rect(let rect):
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.92), lineWidth: 2)
                 .frame(width: rect.width, height: rect.height)
                 .offset(x: rect.minX, y: rect.minY)
@@ -288,42 +288,47 @@ private struct CoachOverlay: View {
         )
         .padding(.horizontal, 20)
 
-        switch step.placement {
-        case .center, .inline:
-            VStack {
-                Spacer(minLength: 0)
-                card
-                Spacer(minLength: 0)
-            }
+        Group {
+            switch step.placement {
+            case .center, .inline:
+                VStack {
+                    Spacer(minLength: 0)
+                    card
+                    Spacer(minLength: 0)
+                }
 
-        case .bottom:
-            VStack {
-                Spacer(minLength: 0)
-                card
-                    .padding(.bottom, 46)
-            }
+            case .bottom:
+                VStack {
+                    Spacer(minLength: 0)
+                    card
+                        .padding(.bottom, 46)
+                }
 
-        case .top:
-            VStack {
-                card
-                    .padding(.top, 58)
-                Spacer(minLength: 0)
-            }
+            case .top:
+                VStack {
+                    card
+                        .padding(.top, 58)
+                    Spacer(minLength: 0)
+                }
 
-        case .aboveTarget:
-            VStack {
-                Spacer(minLength: 0)
-                card
-                    .padding(.bottom, paddingAboveTarget(spotlights.first, in: size))
-            }
+            case .aboveTarget:
+                VStack {
+                    Spacer(minLength: 0)
+                    card
+                        .padding(.bottom, paddingAboveTarget(spotlights.first, in: size))
+                }
 
-        case .belowTarget:
-            VStack {
-                card
-                Spacer(minLength: 0)
+            case .belowTarget:
+                VStack {
+                    card
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, paddingBelowTarget(spotlights.first, in: size))
             }
-            .padding(.top, paddingBelowTarget(spotlights.first, in: size))
         }
+        // Fill the overlay so the tightly sized card stays centred instead of
+        // being pinned to the top-left corner.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func paddingAboveTarget(_ spotlight: CoachSpotlight?, in size: CGSize) -> CGFloat {
@@ -350,7 +355,7 @@ private struct CoachDimShape: Shape {
             switch spotlight {
             case .rect(let hole):
                 path = path.subtracting(
-                    Path(roundedRect: hole, cornerRadius: 16, style: .continuous)
+                    Path(roundedRect: hole, cornerRadius: 12, style: .continuous)
                 )
             case .arc(let arc):
                 path = path.subtracting(arc.path())
@@ -362,6 +367,58 @@ private struct CoachDimShape: Shape {
 
 // MARK: - Instruction card
 
+/// A vertical stack that hugs its content instead of stretching across the
+/// screen. The instruction card uses it so the box wraps tightly around the
+/// text, and the button inside matches the text width.
+private struct HuggingVStack: Layout {
+    var spacing: CGFloat
+    var maxWidth: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let widest = subviews.reduce(CGFloat.zero) { widest, subview in
+            max(widest, subview.sizeThatFits(.unspecified).width)
+        }
+        let limit = min(maxWidth, proposal.width ?? maxWidth)
+        let width = min(max(widest, 1), limit)
+
+        var height: CGFloat = 0
+        for (index, subview) in subviews.enumerated() {
+            if index > 0 { height += spacing }
+            height += subview
+                .sizeThatFits(ProposedViewSize(width: width, height: nil))
+                .height
+        }
+
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        var y = bounds.minY
+        for (index, subview) in subviews.enumerated() {
+            if index > 0 { y += spacing }
+
+            let size = subview.sizeThatFits(
+                ProposedViewSize(width: bounds.width, height: nil)
+            )
+            subview.place(
+                at: CGPoint(x: bounds.minX, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: bounds.width, height: size.height)
+            )
+            y += size.height
+        }
+    }
+}
+
 /// The instruction card. It is drawn by the overlay for most steps, and
 /// inline by the filter sheet so it always sits above the filter list.
 struct CoachInstructionCard: View {
@@ -372,7 +429,7 @@ struct CoachInstructionCard: View {
     let onFinish: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        HuggingVStack(spacing: 0, maxWidth: 300) {
             progressBar
 
             VStack(alignment: .leading, spacing: 10) {
@@ -391,7 +448,6 @@ struct CoachInstructionCard: View {
             }
             .padding(16)
         }
-        .frame(maxWidth: 420)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(Color(uiColor: .secondarySystemBackground))

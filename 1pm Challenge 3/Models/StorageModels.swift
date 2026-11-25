@@ -114,6 +114,12 @@ struct StorageSnapshot: Equatable, Codable {
         return max(0, totalCapacity - usedCapacity)
     }
 
+    /// The capacity printed on the box (for example 128 GB), derived from the
+    /// usable data volume. `totalCapacity` stays the real, formatted size.
+    var advertisedCapacity: Int64? {
+        DeviceStorage.advertisedCapacity(forUsable: totalCapacity)
+    }
+
     /// True when the photo library could not be read, either because the
     /// permission was declined, access is restricted, or access is limited.
     var photosAccessNeedsAttention: Bool {

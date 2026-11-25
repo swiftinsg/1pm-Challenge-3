@@ -92,17 +92,25 @@ struct SettingsSheet: View {
     private var storageSection: some View {
         SettingsCard(title: "Storage") {
             SettingsValueRow(
-                symbol: "internaldrive.fill",
-                title: "Used",
-                value: formattedCapacity(store.snapshot.usedCapacity)
+                symbol: "iphone",
+                title: "iPhone total",
+                value: formattedCapacity(store.snapshot.advertisedCapacity)
             )
 
             separator
 
             SettingsValueRow(
                 symbol: "internaldrive",
-                title: "Capacity",
+                title: "Usable capacity",
                 value: formattedCapacity(store.snapshot.totalCapacity)
+            )
+
+            separator
+
+            SettingsValueRow(
+                symbol: "internaldrive.fill",
+                title: "Used",
+                value: formattedCapacity(store.snapshot.usedCapacity)
             )
 
             separator

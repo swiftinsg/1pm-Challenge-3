@@ -61,4 +61,24 @@ enum DeviceStorage {
 
         return Capacity(total: nil, available: nil)
     }
+
+    /// The storage tiers Apple prints on the box, in decimal gigabytes.
+    private static let advertisedTiersGB: [Int64] = [
+        16, 32, 64, 128, 256, 512, 1000, 2000
+    ]
+
+    /// Maps the usable data volume up to the capacity Apple advertises.
+    ///
+    /// iOS only exposes the formatted volume, so a 128 GB iPhone reports about
+    /// 114.6 GB. The smallest advertised tier at or above that usable size is
+    /// the number on the box, which is what Settings › About shows.
+    static func advertisedCapacity(forUsable usable: Int64?) -> Int64? {
+        guard let usable, usable > 0 else { return nil }
+
+        let usableGB = Double(usable) / 1_000_000_000
+        for tier in advertisedTiersGB where usableGB <= Double(tier) + 0.5 {
+            return tier * 1_000_000_000
+        }
+        return nil
+    }
 }

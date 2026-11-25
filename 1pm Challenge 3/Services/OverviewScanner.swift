@@ -194,7 +194,6 @@ enum OverviewScanner {
 
         if let image = thumbnail.image {
             item.hasQRCode = containsQRCode(image)
-            item.isBlurry = isBlurry(image)
         }
 
         return PhotoScanEntry(item: item, digest: measured.digest)
@@ -838,61 +837,6 @@ enum OverviewScanner {
         }
 
         return !(request.results?.isEmpty ?? true)
-    }
-
-    /// Vision does not expose a public sharpness score, so this uses a
-    /// conservative normalised gradient measure. A low average difference
-    /// between neighbouring pixels indicates an image with almost no detail.
-    private static func isBlurry(_ image: CGImage) -> Bool {
-        let width = 128
-        let height = 128
-        var pixels = [UInt8](repeating: 0, count: width * height)
-
-        let didDraw = pixels.withUnsafeMutableBytes { buffer -> Bool in
-            guard let baseAddress = buffer.baseAddress,
-                  let context = CGContext(
-                    data: baseAddress,
-                    width: width,
-                    height: height,
-                    bitsPerComponent: 8,
-                    bytesPerRow: width,
-                    space: CGColorSpaceCreateDeviceGray(),
-                    bitmapInfo: CGImageAlphaInfo.none.rawValue
-                  ) else {
-                return false
-            }
-
-            context.interpolationQuality = .medium
-            context.draw(
-                image,
-                in: CGRect(x: 0, y: 0, width: width, height: height)
-            )
-            return true
-        }
-
-        guard didDraw else { return false }
-
-        var total = 0.0
-        for y in 0..<height {
-            for x in 1..<width {
-                total += abs(
-                    Double(pixels[y * width + x])
-                        - Double(pixels[y * width + x - 1])
-                )
-            }
-        }
-        for y in 1..<height {
-            for x in 0..<width {
-                total += abs(
-                    Double(pixels[y * width + x])
-                        - Double(pixels[(y - 1) * width + x])
-                )
-            }
-        }
-
-        let sampleCount = Double((width - 1) * height + (height - 1) * width)
-        let averageGradient = total / sampleCount / 255
-        return averageGradient < 0.018
     }
 
     // MARK: - File hashing

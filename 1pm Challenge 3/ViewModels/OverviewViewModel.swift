@@ -120,7 +120,7 @@ final class OverviewViewModel: ObservableObject {
     }
 
     /// Detail page for a filtered set of categories. An item can match more
-    /// than one category (for example a large, blurry photo), so items are
+    /// than one category (for example a large, duplicate photo), so items are
     /// de-duplicated by id before the bytes are summed.
     func combinedUsage(for categories: Set<OverviewCategory>) -> OverviewUsage? {
         let ordered = allCategories.filter { categories.contains($0) }

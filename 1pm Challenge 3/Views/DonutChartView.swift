@@ -288,9 +288,9 @@ struct DonutChartView: View {
         guard snapshot.isLoaded else { return "Measuring storage…" }
         guard let total = snapshot.totalCapacity else { return "Storage unavailable" }
         guard snapshot.usedCapacity != nil else {
-            return "\(StorageFormatter.capacity(total)) capacity"
+            return "\(StorageFormatter.capacity(total)) usable"
         }
-        return "of \(StorageFormatter.capacity(total)) used"
+        return "of \(StorageFormatter.capacity(total)) usable"
     }
 
     private var statusText: String {

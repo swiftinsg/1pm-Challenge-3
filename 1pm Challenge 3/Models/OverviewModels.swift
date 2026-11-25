@@ -11,7 +11,6 @@ import SwiftUI
 enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
     case largePhotos
     case outdatedPhotos
-    case blurryPhotos
     case duplicatePhotos
     case screenshots
     case qrCodes
@@ -30,7 +29,7 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
 
     var kind: StorageCategory {
         switch self {
-        case .largePhotos, .outdatedPhotos, .blurryPhotos,
+        case .largePhotos, .outdatedPhotos,
              .duplicatePhotos, .screenshots, .qrCodes:
             return .photos
         case .largeVideos, .outdatedVideos, .duplicateVideos, .screenRecordings:
@@ -47,8 +46,6 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
             return "Large Photos"
         case .outdatedPhotos:
             return "Outdated Photos"
-        case .blurryPhotos:
-            return "Blurry Photos"
         case .duplicatePhotos:
             return "Duplicate Photos"
         case .screenshots:
@@ -81,8 +78,6 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
             return "Large"
         case .outdatedPhotos, .outdatedVideos, .outdatedFiles:
             return "Outdated"
-        case .blurryPhotos:
-            return "Blurry"
         case .duplicatePhotos, .duplicateVideos, .duplicateFiles:
             return "Duplicates"
         case .screenshots:
@@ -102,8 +97,6 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
             return "photo.fill"
         case .outdatedPhotos:
             return "clock.arrow.circlepath"
-        case .blurryPhotos:
-            return "camera.filters"
         case .duplicatePhotos:
             return "square.on.square"
         case .screenshots:
@@ -135,8 +128,6 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
             return AppTheme.dynamic(light: 0x7C5CFC, dark: 0xA78BFA)
         case .outdatedPhotos:
             return AppTheme.dynamic(light: 0x4F8EF7, dark: 0x60A5FA)
-        case .blurryPhotos:
-            return AppTheme.dynamic(light: 0x14B8A6, dark: 0x2DD4BF)
         case .duplicatePhotos:
             return AppTheme.dynamic(light: 0xEC4899, dark: 0xF472B6)
         case .screenshots:
@@ -163,7 +154,7 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
     }
 
     /// Adjective form used to build combined titles such as
-    /// "Large and Blurry Photos". Categories that already read as nouns
+    /// "Large and Duplicate Photos". Categories that already read as nouns
     /// (Screenshots, Downloads) return nil.
     var combiningName: String? {
         switch self {
@@ -171,8 +162,6 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
             return "Large"
         case .outdatedPhotos, .outdatedVideos, .outdatedFiles:
             return "Outdated"
-        case .blurryPhotos:
-            return "Blurry"
         case .duplicatePhotos, .duplicateVideos, .duplicateFiles:
             return "Duplicate"
         case .screenshots, .qrCodes, .screenRecordings, .downloads:
@@ -181,7 +170,7 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
     }
 
     /// Title for a detail page showing several filtered categories at once,
-    /// e.g. "Large and Blurry Photos" or "Large Photos and Screenshots".
+    /// e.g. "Large and Duplicate Photos" or "Large Photos and Screenshots".
     static func combinedTitle(
         for categories: Set<OverviewCategory>,
         kind: StorageCategory
@@ -245,8 +234,6 @@ enum OverviewCategory: String, CaseIterable, Identifiable, Hashable, Codable {
         case .outdatedPhotos, .outdatedVideos, .outdatedFiles:
             guard let date = item.date else { return false }
             return date < cutoff
-        case .blurryPhotos:
-            return item.isBlurry
         case .duplicatePhotos, .duplicateVideos, .duplicateFiles:
             return item.isDuplicate
         case .screenshots:
@@ -306,7 +293,6 @@ struct OverviewItem: Identifiable, Hashable, Codable {
 
     var isScreenshot: Bool = false
     var hasQRCode: Bool = false
-    var isBlurry: Bool = false
     var isDuplicate: Bool = false
     var isScreenRecording: Bool = false
     var isDownload: Bool = false

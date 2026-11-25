@@ -27,6 +27,18 @@ struct StorageCapacityBar: View {
         return StorageFormatter.capacity(used) + " used"
     }
 
+    /// Both numbers the user needs to make sense of the chart: the capacity
+    /// printed on the box and the smaller, formatted space iOS actually gives
+    /// apps. A 128 GB iPhone therefore reads "iPhone 128 GB · 114.6 GB usable".
+    private var deviceText: String? {
+        guard let total else { return nil }
+        let usable = StorageFormatter.capacity(total)
+        guard let advertised = DeviceStorage.advertisedCapacity(forUsable: total) else {
+            return "\(usable) usable"
+        }
+        return "iPhone \(StorageFormatter.capacity(advertised)) · \(usable) usable"
+    }
+
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
@@ -59,10 +71,18 @@ struct StorageCapacityBar: View {
                 }
             }
             .frame(height: 9)
+
+            if let deviceText {
+                Text(deviceText)
+                    .font(.system(size: 11, weight: .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(AppTheme.tertiaryText)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
         .animation(.easeInOut(duration: 0.9), value: usedFraction)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Storage availability")
-        .accessibilityValue("\(usedText), \(availableText) available")
+        .accessibilityValue("\(usedText), \(availableText) available. \(deviceText ?? "")")
     }
 }
