@@ -14,6 +14,7 @@ import UniformTypeIdentifiers
 struct SettingsSheet: View {
     @ObservedObject var store: StorageStore
     @ObservedObject private var library = DocumentLibrary.shared
+    @ObservedObject private var coach = CoachController.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
@@ -24,24 +25,48 @@ struct SettingsSheet: View {
     @State private var isChoosingFolder = false
     @State private var folderError: String?
     @State private var lastScanFinished: Date?
+    @AppStorage(NotificationService.alertsEnabledKey) private var lowStorageAlertsEnabled = true
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackground()
 
-                ScrollView {
-                    VStack(spacing: 20) {
-                        storageSection
-                        scanSection
-                        walkthroughSection
-                        foldersSection
-                        accessSection
-                        privacyFooter
+                VStack(spacing: 0) {
+                    // During the tour the instruction card sits above the
+                    // storage card, so the two never overlap.
+                    if let step = coach.step, step.showsInlineCard {
+                        CoachInstructionCard(
+                            step: step,
+                            showsContinue: step.showsContinueButton,
+                            onSkip: { coach.finish() },
+                            onContinue: {
+                                coach.advance(from: step, to: step.next)
+                                dismiss()
+                            },
+                            onFinish: { coach.finish() }
+                        )
+                        .coachAnchor(.coachCard)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 10)
+                        .padding(.bottom, 2)
+                        .transition(.opacity)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 28)
+
+                    ScrollView {
+                        VStack(spacing: 20) {
+                            storageSection
+                            scanSection
+                            alertsSection
+                            walkthroughSection
+                            foldersSection
+                            accessSection
+                            privacyFooter
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.top, 8)
+                        .padding(.bottom, 28)
+                    }
                 }
             }
             .navigationTitle("Settings")
@@ -50,12 +75,18 @@ struct SettingsSheet: View {
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .font(.system(size: 15, weight: .semibold))
-                        .tint(.primary)
+                    Button("Done") {
+                        if coach.step == .settingsStorage {
+                            coach.advance(from: .settingsStorage, to: .homeChart)
+                        }
+                        dismiss()
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .tint(.primary)
                 }
             }
         }
+        .coachOverlay(showsCard: false)
         .fileImporter(
             isPresented: $isChoosingFolder,
             allowedContentTypes: [.folder],
@@ -77,6 +108,19 @@ struct SettingsSheet: View {
         .onAppear {
             photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
             store.refreshCapacity()
+
+            // Opening Settings during the tour moves on to the storage
+            // explanation, so the sheet shows its inline instruction card.
+            if coach.step == .settingsButton {
+                coach.advance(from: .settingsButton, to: .settingsStorage)
+            }
+        }
+        .onDisappear {
+            // A swipe-down closes the sheet without tapping Done. Keep the
+            // tour moving instead of leaving it stuck on the settings step.
+            if coach.step == .settingsStorage {
+                coach.advance(from: .settingsStorage, to: .homeChart)
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
@@ -121,6 +165,7 @@ struct SettingsSheet: View {
                 value: formattedCapacity(store.snapshot.availableCapacity)
             )
         }
+        .coachAnchor(.settingsStorageCard)
     }
 
     private func formattedCapacity(_ bytes: Int64?) -> String {
@@ -154,6 +199,53 @@ struct SettingsSheet: View {
         }
 
         return "Update your chart with what’s on this iPhone right now."
+    }
+
+    // MARK: - Alerts
+
+    /// The only notification the app sends: a single low-storage reminder.
+    /// Giving it a visible switch keeps the permission honest and reversible.
+    private var alertsSection: some View {
+        SettingsCard(title: "Alerts") {
+            HStack(spacing: 12) {
+                Image(systemName: "bell.badge.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(AppTheme.secondaryText)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        Circle().fill(AppTheme.surface)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Low storage alerts")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.primary)
+
+                    Text("A reminder when this iPhone is nearly full.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(AppTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 8)
+
+                Toggle("", isOn: $lowStorageAlertsEnabled)
+                    .labelsHidden()
+                    .tint(AppTheme.accent)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .onChange(of: lowStorageAlertsEnabled) { _, enabled in
+            if enabled {
+                NotificationService.updateLowStorageReminder(
+                    available: store.snapshot.availableCapacity,
+                    total: store.snapshot.totalCapacity
+                )
+            } else {
+                NotificationService.cancelLowStorageReminder()
+            }
+        }
     }
 
     // MARK: - Walkthrough

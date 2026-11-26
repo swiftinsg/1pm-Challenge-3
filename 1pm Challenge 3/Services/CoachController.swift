@@ -23,8 +23,9 @@ enum CoachCardPlacement {
 /// Every step waits for the real control to be tapped, so the user learns the
 /// app by using it. The overlay blocks everything that is not highlighted.
 enum CoachStep: String, CaseIterable {
-    case permissions
     case scan
+    case settingsButton
+    case settingsStorage
     case homeChart
     case filterButton
     case filterOutdated
@@ -40,10 +41,12 @@ enum CoachStep: String, CaseIterable {
 extension CoachStep {
     var title: String {
         switch self {
-        case .permissions:
-            return "Enable scanning"
         case .scan:
             return "Start your first scan"
+        case .settingsButton:
+            return "Open Settings"
+        case .settingsStorage:
+            return "Your exact storage"
         case .homeChart:
             return "Explore your storage"
         case .filterButton:
@@ -69,10 +72,12 @@ extension CoachStep {
 
     var message: String {
         switch self {
-        case .permissions:
-            return "Tap Allow on both prompts. Spacer reads only what is already on this iPhone — nothing is uploaded, and iCloud items are never downloaded."
         case .scan:
-            return "Tap SCAN to measure the photos, videos and files already on this iPhone. Large libraries can take a while."
+            return "Tap SCAN to measure the photos, videos and files already on this iPhone. iOS will ask for access the first time."
+        case .settingsButton:
+            return "Tap the gear to see the exact numbers from this iPhone, rescan, and manage the folders Spacer can read."
+        case .settingsStorage:
+            return "iPhone total is the capacity on the box; usable capacity is what iOS actually gives apps. The numbers here always match Home. Tap Continue when you’re ready."
         case .homeChart:
             return "Tap the Photos slice on the ring or the Photos key above it to open every photo category."
         case .filterButton:
@@ -98,10 +103,12 @@ extension CoachStep {
 
     var symbol: String {
         switch self {
-        case .permissions:
-            return "checkmark.shield.fill"
         case .scan:
             return "sparkles"
+        case .settingsButton:
+            return "gearshape.fill"
+        case .settingsStorage:
+            return "internaldrive.fill"
         case .homeChart:
             return "chart.pie.fill"
         case .filterButton:
@@ -127,10 +134,12 @@ extension CoachStep {
 
     var anchors: [CoachAnchor] {
         switch self {
-        case .permissions:
-            return [.permissionStack]
         case .scan:
             return [.scanButton]
+        case .settingsButton:
+            return [.homeSettingsButton]
+        case .settingsStorage:
+            return [.coachCard, .settingsStorageCard]
         case .homeChart:
             return [.homePhotosLegend, .homePhotosSegment]
         case .filterButton:
@@ -156,14 +165,14 @@ extension CoachStep {
 
     var placement: CoachCardPlacement {
         switch self {
-        case .permissions, .homeChart, .filterButton, .categoryLegend,
-             .selectButton:
+        case .homeChart, .filterButton, .categoryLegend,
+             .selectButton, .settingsButton:
             return .bottom
         case .scan, .deleteButton:
             return .aboveTarget
         case .selectItem:
             return .belowTarget
-        case .filterOutdated, .filterThreshold, .filterCancel:
+        case .settingsStorage, .filterOutdated, .filterThreshold, .filterCancel:
             return .inline
         case .finish:
             return .center
@@ -178,7 +187,7 @@ extension CoachStep {
 
     /// A step that lets the user experiment keeps an explicit Continue button.
     var showsContinueButton: Bool {
-        self == .filterThreshold
+        self == .filterThreshold || self == .settingsStorage
     }
 
     /// Progress through the tour, used for the thin bar on the card.
@@ -189,8 +198,9 @@ extension CoachStep {
 
     var next: CoachStep? {
         switch self {
-        case .permissions: return .scan
-        case .scan: return .homeChart
+        case .scan: return .settingsButton
+        case .settingsButton: return .settingsStorage
+        case .settingsStorage: return .homeChart
         case .homeChart: return .filterButton
         case .filterButton: return .filterOutdated
         case .filterOutdated: return .filterThreshold
@@ -222,14 +232,14 @@ final class CoachController: ObservableObject {
     func start() {
         guard !isRunning else { return }
         isRunning = true
-        step = .permissions
+        step = .scan
     }
 
     /// Used when a returning user already has a completed scan.
     func startAtHome() {
         guard !isRunning else { return }
         isRunning = true
-        step = .homeChart
+        step = .settingsButton
     }
 
     func advance(from current: CoachStep, to next: CoachStep?) {
@@ -250,7 +260,7 @@ final class CoachController: ObservableObject {
 
     func resumeAfterScan() {
         guard isRunning, step == nil else { return }
-        step = .homeChart
+        step = .settingsButton
     }
 
     func finish() {

@@ -113,6 +113,7 @@ struct HomeView: View {
                     )
             }
             .buttonStyle(.plain)
+            .coachAnchor(.homeSettingsButton)
             .accessibilityLabel("Settings")
         }
         .padding(.horizontal, 24)

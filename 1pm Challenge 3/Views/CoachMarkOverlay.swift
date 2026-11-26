@@ -8,8 +8,9 @@ import UIKit
 
 /// Every control the walkthrough can spotlight.
 enum CoachAnchor: Hashable {
-    case permissionStack
     case scanButton
+    case homeSettingsButton
+    case settingsStorageCard
     case homePhotosLegend
     case homePhotosSegment
     case filterButton

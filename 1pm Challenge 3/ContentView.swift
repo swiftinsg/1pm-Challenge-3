@@ -23,10 +23,9 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var folderError: String?
     @State private var photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-
-    private var photosGranted: Bool {
-        photoStatus == .authorized || photoStatus == .limited
-    }
+    /// Held while the folder picker is open during the SCAN flow, so the scan
+    /// starts only after the user has answered the Files request.
+    @State private var folderRequestContinuation: CheckedContinuation<Void, Never>?
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -36,15 +35,8 @@ struct ContentView: View {
                         .transition(.opacity)
                 } else {
                     ScanLandingView(
-                        photosGranted: photosGranted,
-                        filesGranted: library.hasFolderAccess,
-                        onAllowPhotos: requestPhotoAccessForScan,
-                        onAllowFiles: { isChoosingFolder = true },
-                        onSkipPermissions: {
-                            coach.advance(from: .permissions, to: .scan)
-                        },
                         onScan: {
-                            await store.refresh(requestAccess: true)
+                            await scanWithAccessRequests()
                         },
                         onFinished: {
                             path = NavigationPath()
@@ -106,6 +98,18 @@ struct ContentView: View {
             // Category pages then open without waiting on a disk decode.
             ScanCache.preload()
 
+            // The very first thing a new user sees: the system notification
+            // prompt, over the SCAN landing page. Photos and Files are asked
+            // for later, when SCAN is tapped.
+            await NotificationService.requestOnFirstLaunch()
+
+            // The permission is now answered, so arm the low-storage reminder
+            // it exists for.
+            NotificationService.updateLowStorageReminder(
+                available: store.snapshot.availableCapacity,
+                total: store.snapshot.totalCapacity
+            )
+
             if hasFinishedScan {
                 await store.refreshIfNeeded()
             }
@@ -117,16 +121,9 @@ struct ContentView: View {
             // The big Home numbers must match the current device capacity as
             // soon as the app comes back.
             store.refreshCapacity()
-            advancePermissionStepIfReady()
 
             guard hasFinishedScan else { return }
             Task { await store.refreshIfNeeded() }
-        }
-        .onChange(of: photoStatus) { _, _ in
-            advancePermissionStepIfReady()
-        }
-        .onChange(of: library.folders) { _, _ in
-            advancePermissionStepIfReady()
         }
         .onChange(of: hasFinishedScan) { _, finished in
             guard finished else { return }
@@ -198,11 +195,12 @@ struct ContentView: View {
         } else {
             coach.start()
         }
-
-        advancePermissionStepIfReady()
     }
 
     private func handleFolderSelection(_ result: Result<[URL], Error>) {
+        // A scan started by SCAN may be waiting on this picker.
+        defer { resumeFolderRequest() }
+
         switch result {
         case .failure(let error):
             if (error as NSError).code != NSUserCancelledError {
@@ -241,7 +239,6 @@ struct ContentView: View {
         Task {
             await store.requestPhotoAccess()
             photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-            advancePermissionStepIfReady()
         }
     }
 
@@ -253,15 +250,30 @@ struct ContentView: View {
         }
     }
 
-    /// Both permissions are in, so the tour moves to the SCAN button.
-    private func advancePermissionStepIfReady() {
-        guard coach.step == .permissions,
-              photosGranted,
-              library.hasFolderAccess else {
-            return
+    /// Runs when the user taps SCAN. Access is requested here — not on the
+    /// landing page — so the first launch only shows the notification prompt.
+    @MainActor
+    private func scanWithAccessRequests() async {
+        // Photos: iOS shows its own alert the first time. A denied status is
+        // not re-prompted; the scan simply measures what it is allowed to.
+        await store.promptForPhotoAccess()
+        photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+
+        // Files: iOS only grants folder access through the system picker, so
+        // it is presented now, before the measurement starts.
+        if !library.hasFolderAccess {
+            await withCheckedContinuation { continuation in
+                folderRequestContinuation = continuation
+                isChoosingFolder = true
+            }
         }
 
-        coach.advance(from: .permissions, to: .scan)
+        await store.refresh(requestAccess: false)
+    }
+
+    private func resumeFolderRequest() {
+        folderRequestContinuation?.resume()
+        folderRequestContinuation = nil
     }
 }
 

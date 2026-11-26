@@ -114,6 +114,12 @@ final class StorageStore: ObservableObject {
         self.snapshot = snapshot
         lastRefresh = Date()
         ScanCache.saveSnapshot(snapshot, at: lastRefresh ?? Date())
+
+        // Keep the low-storage reminder in step with the fresh numbers.
+        NotificationService.updateLowStorageReminder(
+            available: snapshot.availableCapacity,
+            total: snapshot.totalCapacity
+        )
     }
 
     /// Re-reads only the device capacity. This is cheap (a few volume
@@ -139,6 +145,11 @@ final class StorageStore: ObservableObject {
         if updated.isLoaded {
             ScanCache.saveSnapshot(updated, at: lastRefresh ?? Date())
         }
+
+        NotificationService.updateLowStorageReminder(
+            available: updated.availableCapacity,
+            total: updated.totalCapacity
+        )
     }
 
     /// Refreshes when access changed, on first launch, or after the values
@@ -174,16 +185,23 @@ final class StorageStore: ObservableObject {
         await refresh(requestAccess: false)
     }
 
-    /// Asks for photo access if the user has never answered the system prompt.
-    /// If access was already denied, the caller should send the user to Settings.
+    /// Shows the system photo prompt without starting a scan. Used when SCAN
+    /// is tapped, so the access requests happen at that moment instead of on
+    /// the landing page.
     @MainActor
-    func requestPhotoAccess() async {
+    func promptForPhotoAccess() async {
         guard PHPhotoLibrary.authorizationStatus(for: .readWrite) == .notDetermined else {
-            await refresh()
             return
         }
 
         _ = await Self.photoAuthorizationStatus()
+    }
+
+    /// Asks for photo access if the user has never answered the system prompt.
+    /// If access was already denied, the caller should send the user to Settings.
+    @MainActor
+    func requestPhotoAccess() async {
+        await promptForPhotoAccess()
         await refresh()
     }
 
